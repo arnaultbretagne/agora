@@ -305,7 +305,7 @@ export class Lab {
     this.workstreams = new Workstreams({
       store: this.store,
       executions: this.executions,
-      defaults: { leaseSeconds: 600, turnCapSeconds: 3600 },
+      defaults: { leaseSeconds: 600, ceilingSeconds: 21_600 },
       maxActive: 4,
       renewSeconds: 60,
       tickMs: 100,

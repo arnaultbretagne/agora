@@ -58,6 +58,8 @@ export interface WorkstreamsOptions {
   readonly defaults: Limits
   readonly maxActive: number
   readonly renewSeconds: number
+  /** An execution's token's life (docs/specs/credentials.md, `exp`): an hour by default, never under three leases. */
+  readonly tokenSeconds?: number
   readonly tickMs?: number
   /** How often the files' sweep runs (docs/specs/files.md, "The sweep"): once an hour by default. */
   readonly sweepMs?: number
@@ -88,9 +90,10 @@ function steerable(prompt: unknown): boolean {
 /** A set of profiles, as the tokens map compares them. */
 const key = (profiles: readonly string[]): string => [...profiles].sort().join(',')
 
-function limitsOf(e: Execution): Limits {
-  const limits = object(e.body.limits) ?? {}
-  return { leaseSeconds: Number(schemaValue(limits.leaseSeconds)), turnCapSeconds: Number(schemaValue(limits.turnCapSeconds)) }
+/** The first and the last prompt an execution's agent was given: the start of its first turn and of its last; none before it took one. */
+function promptsOf(state: State, e: Execution): { first: string; last: string } | null {
+  const started = [...state.turns.values()].filter((t) => t.execution === e.id && !t.native && t.dispatching && t.startedAt !== undefined).map((t) => t.startedAt!)
+  return started.length === 0 ? null : { first: started[0]!, last: started.at(-1)! }
 }
 
 export class Workstreams implements Handler {
@@ -104,6 +107,8 @@ export class Workstreams implements Handler {
    * (sorted, joined), or null when not known — after a restart.
    */
   private readonly tokens = new Map<string, { until: number; profiles: string | null }>()
+  /** The executions in which work their agent started was running when last seen, once a turn was over. */
+  private readonly working = new Set<string>()
   /** The Workstreams whose execution has not ended: the clock visits these only. */
   private readonly live = new Set<string>()
   /** Projections asked by received lines, per Workstream: at most one every PROJECT_EVERY_MS. */
@@ -135,6 +140,26 @@ export class Workstreams implements Handler {
   private get executions(): ExecutionManager {
     return this.options.executions
   }
+  /** Its Create's limits; an execution recorded before the ceiling existed has the server's. */
+  private limitsOf(e: Execution): Limits {
+    const limits = object(e.body.limits) ?? {}
+    const ceiling = Number(schemaValue(limits.ceilingSeconds))
+    return { leaseSeconds: Number(schemaValue(limits.leaseSeconds)), ceilingSeconds: Number.isFinite(ceiling) && ceiling > 0 ? ceiling : this.options.defaults.ceilingSeconds }
+  }
+
+  /** How long an execution's token lasts from when it is handed (docs/specs/credentials.md, `exp`). */
+  private tokenLife(e: Execution): number {
+    return Math.max(this.options.tokenSeconds ?? 3600, 3 * this.limitsOf(e).leaseSeconds)
+  }
+
+  /**
+   * The ceiling (docs/specs/executions.md, "The deadline"): the last prompt's start plus the execution's ceiling, and the
+   * time its approvals waited since.
+   */
+  private ceiling(state: State, e: Execution, last: string, now: number): number {
+    return Date.parse(last) + this.limitsOf(e).ceilingSeconds * 1000 + waited(state, last, now)
+  }
+
   private report(fields: Record<string, unknown>): void {
     telemetry(fields, this.options.sink ?? (() => {}))
   }
@@ -774,6 +799,7 @@ export class Workstreams implements Handler {
     this.executions.release(e.id)
     this.live.delete(workstream)
     this.tokens.delete(e.id)
+    this.working.delete(e.id)
     // Its views are written; what it needs again is read back from PostgreSQL.
     await this.project(workstream)
     this.store.forget(workstream)
@@ -859,15 +885,16 @@ export class Workstreams implements Handler {
       if (entry.method !== 'initialize' && !latest.initialized) continue
       if (entry.method === 'session/prompt' && !latest.session) continue
       if (entry.method === 'session/prompt') {
-        // The token must last the whole turn (docs/specs/credentials.md, "Between turns").
-        if (!(await this.ensureToken(e))) {
-          await this.fail(workstream, entry, 'credentials_refused')
-          continue
-        }
-        const { leaseSeconds, turnCapSeconds } = limitsOf(e)
-        const until = Math.min(Date.now() + leaseSeconds * 1000, Date.parse(entry.time) + turnCapSeconds * 1000)
+        // This prompt is the last: the ceiling counts from it (docs/specs/executions.md, "The deadline").
+        const { leaseSeconds, ceilingSeconds } = this.limitsOf(e)
+        const until = Math.min(Date.now() + leaseSeconds * 1000, Date.parse(entry.time) + ceilingSeconds * 1000)
         if (until <= Date.now() || !latest.uid) {
           await this.fail(workstream, entry, 'deadline_refused')
+          continue
+        }
+        // The token outlives the deadline it is about to get (docs/specs/credentials.md, "Between turns").
+        if (!(await this.ensureToken(e, until))) {
+          await this.fail(workstream, entry, 'credentials_refused')
           continue
         }
         try {
@@ -956,10 +983,10 @@ export class Workstreams implements Handler {
     const profiles = await this.profilesOf(e)
     const held = this.tokens.get(e.id)
     if (source === undefined || (profiles.length === 0 && (held === undefined || held.profiles === ''))) return true
-    const { leaseSeconds, turnCapSeconds } = limitsOf(e)
     try {
       const address = await this.executions.podAddress(e.id)
-      const credentials = await source.mint({ label: `agora ${e.id}`, ttlSeconds: turnCapSeconds + leaseSeconds, profiles, address })
+      // Renewed as the deadline moves, it never runs out while the sandbox lives (docs/specs/credentials.md, "Between turns").
+      const credentials = await source.mint({ label: `agora ${e.id}`, ttlSeconds: this.tokenLife(e), profiles, address })
       await this.executions.putCredentials(e.id, credentials)
       this.tokens.set(e.id, { until: Date.parse(credentials.expiresAt ?? '') || 0, profiles: key(profiles) })
       return true
@@ -970,10 +997,11 @@ export class Workstreams implements Handler {
   }
 
   /**
-   * A new token before a prompt if the current one would run out within the turn and a minute, or
-   * names other profiles than the execution's.
+   * A new token before Agora sets a deadline less than half a token's life before the current one runs out, or when it
+   * names other profiles than the execution's (docs/specs/credentials.md, "Between turns"). `deadline`: the one about to
+   * be set; the claim's when none is.
    */
-  private async ensureToken(e: Execution): Promise<boolean> {
+  private async ensureToken(e: Execution, deadline?: number): Promise<boolean> {
     if (this.options.credentials === undefined) return true
     const profiles = key(await this.profilesOf(e))
     let held = this.tokens.get(e.id)
@@ -983,7 +1011,8 @@ export class Workstreams implements Handler {
       held = { until: Date.parse(outbound?.expiresAt ?? '') || 0, profiles: outbound !== undefined && outbound.proxy === null ? '' : null }
       this.tokens.set(e.id, held)
     }
-    if (held.profiles === profiles && (profiles === '' || held.until - Date.now() >= (limitsOf(e).turnCapSeconds + 60) * 1000)) return true
+    const until = deadline ?? (Date.parse(this.executions.claimOf(e.id)?.spec?.lifecycle?.shutdownTime ?? '') || Date.now() + this.limitsOf(e).leaseSeconds * 1000)
+    if (held.profiles === profiles && (profiles === '' || held.until - until >= (this.tokenLife(e) / 2) * 1000)) return true
     return this.handToken(e)
   }
 
@@ -1228,12 +1257,20 @@ export class Workstreams implements Handler {
       // An internal error is how an adapter reports that the agent under it died: nothing answers there any more.
       if (entry.rpc_kind === 'error' && schemaValue(object(entry.content.error)?.code) === INTERNAL_ERROR)
         await this.agentLost(workstream, e, 'agent_failed')
-      else
+      else {
+        // One lease, never beyond the ceiling; then work left running renews it, or nothing does (docs/specs/executions.md, "The deadline").
+        const prompted = promptsOf(state, e)
+        const now = Date.now()
+        const until = Math.min(now + this.limitsOf(e).leaseSeconds * 1000, prompted === null ? Infinity : this.ceiling(state, e, prompted.last, now))
         try {
-          await this.executions.renew(execution, e.uid, iso(Date.now() + limitsOf(e).leaseSeconds * 1000))
+          if (until > now) {
+            if (!(await this.ensureToken(e, until))) throw new Error('credentials_refused')
+            await this.executions.renew(execution, e.uid, iso(until))
+          }
         } catch {
           this.report({ operation: 'renew', outcome: 'failed', workstream, execution, errorClass: 'transport' })
         }
+      }
     }
     // After a turn, what went out through the bridge: tunnels, the proxy's answers, in the mechanics' view.
     if (entry?.correlated_method === 'session/prompt' && ['response', 'error'].includes(entry.rpc_kind ?? ''))
@@ -1367,6 +1404,17 @@ export class Workstreams implements Handler {
   }
 
   /**
+   * Whether work the agent started since `since`, its first prompt, still runs in the sandbox: a process under its adapter
+   * the bridge lists, started since (docs/specs/executions.md, "What still runs"). Null when the bridge does not say.
+   */
+  private async running(e: Execution, since: string): Promise<boolean | null> {
+    const info = await this.executions.info(e.id).catch(() => null)
+    if (info === null) return null
+    const from = Date.parse(since)
+    return info.processes.some((p) => Date.parse(p.startedAt) >= from)
+  }
+
+  /**
    * `initialize` and Session opening: answered within the timeout, or the execution fails. An invalid
    * answer leaves the request pending (docs/specs/log.md, "Validation"): only a valid one stops the clock.
    * Decided under the Workstream's lock, so an answer captured meanwhile wins.
@@ -1414,19 +1462,38 @@ export class Workstreams implements Handler {
     }
   }
 
-  /** During a dispatched turn: min(now + lease, turn start + maximum duration), the last step included. */
+  /**
+   * docs/specs/executions.md, "The deadline": at each step, min(now + lease, the ceiling) while a turn runs, or once it
+   * is over while work its agent started since its first prompt still runs; once that work is no longer seen, one lease
+   * from then, and nothing more.
+   */
   private async renew(workstream: string, state: State, e: Execution): Promise<void> {
-    const turn = state.active
-    if (!turn || !turn.dispatching || !turn.startedAt || !e.uid || e.stopped || e.lost || e.failed || this.ending(e) || this.blocked.has(workstream)) return
+    if (!e.uid || e.stopped || e.lost || e.failed || this.ending(e) || this.blocked.has(workstream)) return
     // Recovery is bounded by the deadline already granted: no renewal without the connection.
     if (!e.connection || this.executions.connectionOf(e.id) !== e.connection) return
-    const { leaseSeconds, turnCapSeconds } = limitsOf(e)
-    // The turn's maximum counts its time but its approvals' waits (docs/specs/executions.md, "The deadline").
-    const cap = Date.parse(turn.startedAt) + turnCapSeconds * 1000 + waited(state, turn.startedAt, Date.now())
-    const next = Math.min(Date.now() + leaseSeconds * 1000, cap)
+    const prompted = promptsOf(state, e)
+    if (prompted === null) return
+    const { leaseSeconds } = this.limitsOf(e)
+    const now = Date.now()
+    // The ceiling counts from the last prompt, but its approvals' waits.
+    const cap = this.ceiling(state, e, prompted.last, now)
+    const next = Math.min(now + leaseSeconds * 1000, cap)
     const current = Date.parse(this.executions.claimOf(e.id)?.spec?.lifecycle?.shutdownTime ?? '0')
     const step = Math.min(this.options.renewSeconds, leaseSeconds / 3) * 1000
-    if (next <= Date.now() || !(next - current >= step || (next === cap && current < cap))) return
+    if (next <= now || !(next - current >= step || (next === cap && current < cap))) return
+    const turn = state.active
+    if (!turn || !turn.dispatching || !turn.startedAt) {
+      // No turn: the bridge is asked what runs, at most once a step.
+      const running = await this.running(e, prompted.first)
+      if (running === null) return
+      if (running) this.working.add(e.id)
+      // Its work just ended: the lease starts now.
+      else if (!this.working.delete(e.id)) return
+    }
+    if (!(await this.ensureToken(e, next))) {
+      this.report({ operation: 'renew', outcome: 'blocked', workstream, execution: e.id, errorClass: 'transport' })
+      return
+    }
     try {
       await this.executions.renew(e.id, e.uid, iso(next))
       this.report({ operation: 'renew', outcome: 'succeeded', workstream, execution: e.id })

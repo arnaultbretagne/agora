@@ -116,7 +116,12 @@ describe('bridge', () => {
     assert.deepEqual(await processes(), [], 'the adapter alone: nothing listed')
     const before = Date.now()
     assert.equal(((await say(client, 2, sessionId, '/background 2 bg.txt')).result as { stopReason: string }).stopReason, 'end_turn')
-    const running = await processes()
+    // The shell, then the command it starts.
+    let running = await processes()
+    for (let i = 0; i < 40 && !running.some((p) => p.command === 'sleep'); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      running = await processes()
+    }
     assert.ok(running.some((p) => p.command === 'sh') && running.some((p) => p.command === 'sleep'), JSON.stringify(running))
     // Started by the turn, after the adapter: a start counted in hundredths of a second.
     for (const p of running) assert.ok(Date.parse(p.startedAt) >= before - 50 && Date.parse(p.startedAt) <= Date.now(), JSON.stringify(p))

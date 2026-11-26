@@ -7,6 +7,7 @@ import { WebSocket, type RawData } from 'ws'
 import { KubeError, WatchGone, type Claim, type KubeApi, type Sandbox, type WatchEvent } from './kube.ts'
 import { mintBridgeToken } from '@agora/harness-bridge/token'
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
+import type { ProcessView } from '@agora/harness-bridge/processes'
 import { BASE_PROFILES_ANNOTATION, baseProfiles } from '@agora/credentials'
 
 export const MANAGED_BY = 'app.kubernetes.io/managed-by'
@@ -19,14 +20,15 @@ const SELECTOR = `${MANAGED_BY}=${MANAGER},${EXECUTION_LABEL}`
 export const MAX_LINE = 16 * 1024 * 1024
 export const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
 
+/** An execution's deadline (docs/specs/executions.md, "The deadline"): the lease, and the ceiling since its last prompt. */
 export interface Limits {
   readonly leaseSeconds: number
-  readonly turnCapSeconds: number
+  readonly ceilingSeconds: number
 }
 
 export const LIMIT_BOUNDS: Record<keyof Limits, readonly [number, number]> = {
   leaseSeconds: [60, 600],
-  turnCapSeconds: [30, 3600],
+  ceilingSeconds: [30, 21_600],
 }
 
 /** A pool kept for the tests: offered by the API, not by the screen (docs/specs/executions.md). */
@@ -124,6 +126,17 @@ interface Run {
   launchType: string | null
   podDetail: string | null
   outbound: OutboundView | null
+  /** What ran under the adapter when the bridge was last asked (docs/specs/executions.md, "What still runs"). */
+  processes: readonly ProcessView[] | null
+}
+
+/** What the bridge says of itself, `GET /info`. */
+export interface BridgeInfo {
+  readonly instance: string
+  readonly workspace: string
+  readonly adapter: unknown
+  readonly outbound: OutboundView
+  readonly processes: readonly ProcessView[]
 }
 
 export interface ExecutionView {
@@ -145,6 +158,7 @@ export interface ExecutionView {
   readonly pending: number
   readonly held: boolean
   readonly outbound: OutboundView | null
+  readonly processes: readonly ProcessView[] | null
 }
 
 export interface PoolView {
@@ -240,7 +254,7 @@ export class ExecutionManager {
   async run(target: Target): Promise<void> {
     let run = this.runs.get(target.execution)
     if (run !== undefined) return
-    run = { target, claim: null, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null }
+    run = { target, claim: null, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null, processes: null }
     this.runs.set(target.execution, run)
     if (this.handler !== null) await this.observe(run, this.claims.get(target.execution) ?? null)
   }
@@ -604,13 +618,16 @@ export class ExecutionManager {
     })
   }
 
-  async info(execution: string): Promise<{ instance: string; workspace: string; adapter: unknown; outbound: OutboundView }> {
+  async info(execution: string): Promise<BridgeInfo> {
     const response = await this.bridge(execution, 'GET', '/info', undefined, 5000)
     if (!response.ok) throw new Error('bridge_info_refused')
-    const info = (await response.json()) as { instance: string; workspace: string; adapter: unknown; outbound: OutboundView }
+    const info = (await response.json()) as BridgeInfo
+    // A bridge older than the processes' list says nothing runs.
+    if (!Array.isArray(info.processes)) Object.assign(info, { processes: [] })
     const run = this.runs.get(execution)
     if (run !== undefined) {
       run.outbound = info.outbound
+      run.processes = info.processes
       this.emit(run)
     }
     return info
@@ -803,6 +820,7 @@ export class ExecutionManager {
       pending: c === null || c.closed ? 0 : c.pending,
       held: run.held,
       outbound: run.outbound,
+      processes: run.processes,
     }
   }
 

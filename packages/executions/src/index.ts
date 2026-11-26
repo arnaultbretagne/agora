@@ -18,6 +18,7 @@ export {
   type ManagerOptions,
   type Handler,
   type Target,
+  type BridgeInfo,
   type ExecutionView,
   type PoolView,
   type CommandResult,

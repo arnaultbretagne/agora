@@ -359,7 +359,7 @@ export class Delegations {
           profiles: [...rights, 'agora:submit'],
           // Its role is its Workstream's (docs/specs/roles.md): the log gives it its persona.
           ...(role !== null ? { role: role.name } : {}),
-          limits: { leaseSeconds: limits.leaseSeconds, turnCapSeconds: limits.turnCapSeconds },
+          limits: { leaseSeconds: limits.leaseSeconds, ceilingSeconds: limits.ceilingSeconds },
         },
       },
       'agora',
