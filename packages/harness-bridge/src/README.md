@@ -8,6 +8,7 @@
 | `processes.ts` | What still runs under the adapter, read from `/proc`, for `GET /info`. |
 | `instructions.ts` | What the agent is told: `AGENTS.md` in the workspace, the claims of its token in `~/.agora/access.json`. |
 | `agent-instructions.md` | The text of that `AGENTS.md`, the same for every harness. |
+| `trust.ts` | The gateway's root beyond Node: `SSL_CERT_FILE` for OpenSSL's clients, Chromium's NSS database under HOME. |
 | `kubeconfig.yaml` | kubectl's configuration, named in the adapter's `KUBECONFIG`: the cluster through the gateway, no credential. |
 | `token.ts` | Agora's Ed25519 token: signing (Agora) and verification (bridge). |
 | `anchor.ts` | The anchor: each harness's native directory, reading en bloc, push, restore. |
