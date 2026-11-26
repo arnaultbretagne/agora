@@ -72,7 +72,7 @@ A delegator is told what its delegate cannot tell it, by the same gesture: a mes
 | When | The message says |
 | --- | --- |
 | A delegate's turn holding a message that is not the person's is done with no message | It ended its turn with nothing to say. |
-| A delegate's turn fails, its Session does not open, or its execution is lost | What happened. |
+| A delegate's turn fails, its Session does not open, or its execution is lost | What happened, and why: a turn failed by its execution's end, `Its turn failed:` and the end's cause (`executions.md`, "How an execution ended") — `its sandbox reached its time bound`, `its sandbox's lease expired during the turn, not renewed`, `its Pod was killed for lack of memory (OOMKilled)`, `its Pod was gone before its deadline` and its reason in brackets when one was seen, `its sandbox ended while Agora was not running` —; a loss, `Its execution was lost:` and its reason — `the agent's process exited with code <n>` or `was killed by <signal>`, `the agent stopped on an internal error`, `its sandbox was replaced`. |
 | The person stops a delegate, or cancels its turn | That the person did. |
 | A delegate's agent asks a permission or a form | The request ("Requests"). |
 

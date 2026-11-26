@@ -42,6 +42,10 @@ export interface Execution {
   ended: boolean
   lost: boolean
   failed?: boolean
+  /** Its `execution.lost` content: the reason, and how the adapter ended when it exited. */
+  loss?: Record<string, unknown>
+  /** Its `execution.ended` cause (docs/specs/executions.md, "How an execution ended"). */
+  cause?: unknown
   clean: boolean
   initialized: boolean
   /** The open Session's `configOptions`, as it last gave them (docs/specs/log.md, "Sessions"). */
@@ -381,8 +385,14 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             turn.status = 'uncertain'
     }
     if (['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind) && execution) {
-      if (entry.kind === 'execution.ended') execution.ended = true
-      if (entry.kind === 'execution.lost') execution.lost = true
+      if (entry.kind === 'execution.ended') {
+        execution.ended = true
+        if (entry.content.cause !== undefined) execution.cause = entry.content.cause
+      }
+      if (entry.kind === 'execution.lost') {
+        execution.lost = true
+        execution.loss = entry.content
+      }
       if (entry.kind === 'execution.failed') execution.failed = true
       execution.connection = undefined
       for (const turn of state.turns.values())
@@ -865,7 +875,14 @@ export class CoreProjection {
               entry.kind === 'request.failed' ||
               (entry.kind === 'execution.break' && entry.content.clean !== true) ||
               ['execution.lost', 'execution.failed', 'execution.ended'].includes(entry.kind)
-            ? { reason: entry.content.reason ?? 'transport_error' }
+            ? {
+                reason: entry.content.reason ?? 'transport_error',
+                // How it ended (docs/specs/log.md, "Notices"): the adapter's exit, the execution's cause.
+                ...(entry.kind === 'execution.lost' && entry.content.reason === 'adapter_exited'
+                  ? { exitCode: schemaValue(entry.content.exitCode ?? null), signal: entry.content.signal ?? null }
+                  : {}),
+                ...(entry.kind === 'execution.ended' && entry.content.cause !== undefined ? { cause: schemaValue(entry.content.cause) } : {}),
+              }
             : null
       if (notice)
         put(
