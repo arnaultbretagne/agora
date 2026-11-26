@@ -153,8 +153,11 @@ test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ende
 
 test('E41 a claim never obtained: its creation refused until its initial deadline; failed, then ended, never said to be Agora’s absence', LIMIT, async (t) => {
   const d = await delegated(t, 'never read', { leaseSeconds: 60, turnCapSeconds: 3600 }, (kube) => (kube.failCreates = true))
-  // The delegate's claim alone: its delegator's next execution, which Agora's message starts, gets its own.
+  // The delegate's claim alone.
   d.kube.failCreates = (name) => name === d.e.claimName
+  // Its delegator kept running past its delegate's initial deadline, which its own lease would otherwise end with: a turn
+  // renews it.
+  assert.ok((await d.lab.write(d.ws, '/sleep 120')).accepted)
   const end = await ended(d, 75_000)
   const failed = (await d.lab.entries(d.delegate)).find((x) => x.kind === 'execution.failed' && x.execution === d.e.id)
   assert.equal(failed?.content.reason, 'startup_failed')
@@ -163,7 +166,7 @@ test('E41 a claim never obtained: its creation refused until its initial deadlin
   assert.ok(Date.parse(end.time) >= Date.parse(String(d.e.body.deadline)))
   assert.deepEqual(end.content.cause, { kind: 'not_obtained' })
   assert.deepEqual((await noticeOf(d, end)).cause, { kind: 'not_obtained' })
-  assert.equal(await told(d), `Your delegate ${d.delegate} "never read": Its execution could not start.`)
+  assert.equal(await told(d, 30_000), `Your delegate ${d.delegate} "never read": Its execution could not start.`)
 })
 
 test('E40 what was seen of a Pod within the margin before the deadline it reached is that deadline’s: the bound reached, not a Pod gone; seen before the margin, a Pod gone', () => {
