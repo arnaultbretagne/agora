@@ -738,52 +738,55 @@ async function shot(page: Page, name: string): Promise<void> {
  * The accounts' limits as the server would read them through the gateway, which the tests never reach: Claude's
  * 5-hour window 72 % used, its week 19 %; ChatGPT's, `pro`, 8 % and 40 %; z.ai's last read failed, its windows
  * kept from the read before; an account with neither windows nor a reason. The mock's pool draws from none of
- * them. `answer` changes what the next reads give, `initial` the first answer; `reads` counts them.
+ * them. Each window starts again as long after each read as said here; z.ai's windows stand from a read 40 minutes
+ * before the first. `answer` changes what the next reads give, `initial` the first answer; `reads` counts them.
  */
 async function limitsOf(page: Page) {
-  const now = Date.now()
-  const at = (ms: number) => new Date(now + ms).toISOString()
-  const checkedAt = at(-40 * 60_000)
-  const initial: Record<string, unknown> = {
-    anthropic: {
-      windows: [
-        { kind: 'five_hour', usedPercent: 72, resetsAt: at(2 * 3_600_000 + 10 * 60_000 - 1000) },
-        { kind: 'weekly', usedPercent: 19, resetsAt: at(3 * 86_400_000 + 4 * 3_600_000 - 1000) },
-      ],
-      plan: null,
-      checkedAt: at(0),
-      stale: false,
-      error: null,
-    },
-    chatgpt: {
-      windows: [
-        { kind: 'five_hour', usedPercent: 8, resetsAt: at(45 * 60_000 - 1000) },
-        { kind: 'weekly', usedPercent: 40, resetsAt: at(86_400_000 - 1000) },
-      ],
-      plan: 'pro',
-      checkedAt: at(0),
-      stale: false,
-      error: null,
-    },
-    nobody: { windows: [], plan: null, checkedAt: null, stale: true, error: null },
-    zai: {
-      windows: [
-        { kind: 'five_hour', usedPercent: 30, resetsAt: at(3_600_000 - 1000) },
-        { kind: 'weekly', usedPercent: 55, resetsAt: at(5 * 86_400_000 - 1000) },
-      ],
-      plan: 'lite',
-      checkedAt,
-      stale: true,
-      error: 'api.z.ai answered 503',
-    },
+  const checkedAt = new Date(Date.now() - 40 * 60_000).toISOString()
+  const initial = (): Record<string, unknown> => {
+    const now = Date.now()
+    const at = (ms: number) => new Date(now + ms).toISOString()
+    return {
+      anthropic: {
+        windows: [
+          { kind: 'five_hour', usedPercent: 72, resetsAt: at(2 * 3_600_000 + 10 * 60_000 - 1000) },
+          { kind: 'weekly', usedPercent: 19, resetsAt: at(3 * 86_400_000 + 4 * 3_600_000 - 1000) },
+        ],
+        plan: null,
+        checkedAt: at(0),
+        stale: false,
+        error: null,
+      },
+      chatgpt: {
+        windows: [
+          { kind: 'five_hour', usedPercent: 8, resetsAt: at(45 * 60_000 - 1000) },
+          { kind: 'weekly', usedPercent: 40, resetsAt: at(86_400_000 - 1000) },
+        ],
+        plan: 'pro',
+        checkedAt: at(0),
+        stale: false,
+        error: null,
+      },
+      nobody: { windows: [], plan: null, checkedAt: null, stale: true, error: null },
+      zai: {
+        windows: [
+          { kind: 'five_hour', usedPercent: 30, resetsAt: at(3_600_000 - 1000) },
+          { kind: 'weekly', usedPercent: 55, resetsAt: at(5 * 86_400_000 - 1000) },
+        ],
+        plan: 'lite',
+        checkedAt,
+        stale: true,
+        error: 'api.z.ai answered 503',
+      },
+    }
   }
   let limits = initial
   let reads = 0
   await page.route('**/api/limits', (route) => {
     reads++
-    return route.fulfill({ json: { limits } })
+    return route.fulfill({ json: { limits: limits() } })
   })
-  return { reads: () => reads, answer: (next: Record<string, unknown>) => void (limits = next), initial, checkedAt }
+  return { reads: () => reads, answer: (next: Record<string, unknown> | (() => Record<string, unknown>)) => void (limits = typeof next === 'function' ? next : () => next), initial, checkedAt }
 }
 
 /** The header's gauge. */
@@ -823,7 +826,9 @@ test('U43 the context and the limits: every subscription behind the header\'s ga
   await gauge.click()
   const popover = page.locator('[data-slot=limits-popover]')
   await popover.getByRole('region', { name: 'Claude' }).waitFor()
-  assert.equal(limits.reads(), 2, 'read again as it opens')
+  // The sections stand from the first read while the second is on its way: counted once it has been asked.
+  await until('read again as it opens', () => limits.reads() >= 2)
+  assert.equal(limits.reads(), 2, 'read once more, not twice')
   const sections = await sectionsOf(popover)
   assert.deepEqual(sections.map((s) => s.name), ['Claude', 'ChatGPT', 'z.ai'], 'each account with windows or a reason, in order; the one with neither left out')
   assert.match(sections[0]!.text, /^Claude\s+5-hour\s+72% · resets in 2h 10m\s+Weekly\s+19% · resets in 3d 4h$/, 'no plan for Claude')
