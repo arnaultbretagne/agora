@@ -29,6 +29,7 @@ import type { Notifications } from './notifications.ts'
 import type { FirstSessions } from './first-sessions.ts'
 import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, type Execution, type PromptCapabilities, type State } from './state.ts'
 import { isRole } from './marks.ts'
+import { causeOf } from './ends.ts'
 import { roleBlock, type Role } from './roles.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
@@ -807,8 +808,18 @@ export class Workstreams implements Handler {
   }
 
   private async end(workstream: string, e: Execution, reason: Reason): Promise<void> {
-    const anchor = (await this.store.entries(workstream)).findLast((x) => x.kind === 'anchor.received' && x.execution === e.id)
-    await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, anchor: anchor?.content.id ?? null } })
+    const entries = await this.store.entries(workstream)
+    const anchor = entries.findLast((x) => x.kind === 'anchor.received' && x.execution === e.id)
+    const cause = causeOf({
+      lost: entries.findLast((x) => x.kind === 'execution.lost' && x.execution === e.id)?.content ?? null,
+      stopped: e.stopped,
+      obtained: e.uid !== undefined,
+      ...(await this.atBound(workstream, e)),
+      prompted: e.prompted,
+      observed: this.executions.observed(e.id),
+      now: Date.now(),
+    })
+    await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, cause, anchor: anchor?.content.id ?? null } })
     this.executions.release(e.id)
     this.live.delete(workstream)
     this.tokens.delete(e.id)
@@ -823,8 +834,8 @@ export class Workstreams implements Handler {
    * docs/specs/executions.md, "The deadline": a dead agent ends its execution at once. Its deadline
    * moves to now, so the Pod ends and pushes its anchor without waiting out the lease.
    */
-  private async agentLost(workstream: string, e: Execution, reason: 'adapter_exited' | 'agent_failed'): Promise<void> {
-    await this.store.fact(workstream, { kind: 'execution.lost', execution: e.id, content: { reason } })
+  private async agentLost(workstream: string, e: Execution, reason: 'adapter_exited' | 'agent_failed', detail: Record<string, unknown> = {}): Promise<void> {
+    await this.store.fact(workstream, { kind: 'execution.lost', execution: e.id, content: { reason, ...detail } })
     this.executions.hold(e.id)
     if (!e.uid) return
     try {
@@ -1348,9 +1359,27 @@ export class Workstreams implements Handler {
         content: { connection, code, clean: drained && proven },
       })
       const e = state.executions.get(execution)
-      if (code === 1011 && e && !e.lost && !e.ended) await this.agentLost(workstream, e, 'adapter_exited')
+      if (code === 1011 && e && !e.lost && !e.ended) await this.agentLost(workstream, e, 'adapter_exited', await this.exitOf(execution))
       await this.project(workstream)
     })
+  }
+
+  /** How the adapter ended, as its bridge's `/info` says (docs/specs/executions.md, "The bridge's routes"); null when it cannot say. */
+  private async exitOf(execution: string): Promise<{ exitCode: number | null; signal: string | null }> {
+    const adapter = object((await this.executions.info(execution).catch(() => null))?.adapter)
+    return { exitCode: typeof adapter?.exitCode === 'number' ? adapter.exitCode : null, signal: typeof adapter?.signal === 'string' ? adapter.signal : null }
+  }
+
+  /**
+   * What the end's cause reads of the bound (docs/specs/executions.md, "Why an execution ended"): its turn still running,
+   * and the ceiling every move of its deadline is capped at — its last instruction plus its ceiling —, a turn running or not.
+   */
+  private async atBound(workstream: string, e: Execution): Promise<{ running: { bound: number } | null; bound: number | null }> {
+    const state = await this.store.state(workstream)
+    const last = await this.lastPrompt(workstream, state, e)
+    const bound = last === null ? null : last + this.limitsOf(e).ceilingSeconds * 1000
+    const turn = [...state.turns.values()].find((t) => t.execution === e.id && t.dispatching && !t.answered && t.status !== 'failed')
+    return { running: turn?.startedAt && bound !== null ? { bound } : null, bound }
   }
 
   // ---------------------------------------------------------------- the anchor pushed by the Pod

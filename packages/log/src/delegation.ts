@@ -10,6 +10,7 @@ import { contentRefusal, fieldsText, patternRefusal } from './forms.ts'
 import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META, isRole } from './marks.ts'
 import type { Role } from './roles.ts'
+import { causeText, lostText } from './ends.ts'
 import { delegationOf, requestsOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
 import { telemetry } from './telemetry.ts'
@@ -85,9 +86,9 @@ export function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn 
   return words.trim()
 }
 
-/** What the end of an execution says to its delegate's delegator, when it says something. */
+/** What the end of an execution says to its delegate's delegator, when it says something: why it was lost, too. */
 const endOf = (e: Execution): string | null =>
-  e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
+  e.stopped ? 'The person stopped it.' : e.lost ? `Its execution was lost: ${lostText(e.loss)}.` : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
 
 /**
  * What a delegate's request asks, as its delegator reads it (docs/specs/delegation.md, "Requests"): its number; for a
@@ -693,8 +694,8 @@ export class Delegations {
     const e = state.executions.get(turn.execution)
     const entries = await this.store.entries(delegate)
     if (turn.status === 'failed') {
-      // The agent's error message, or the closed reason of a failure of Agora's.
-      const why = object(turn.failure)?.message ?? turn.failure
+      // The agent's error message, the closed reason of a failure of Agora's, or why its execution ended.
+      const why = object(turn.failure)?.message ?? turn.failure ?? (e?.ended && e.cause !== undefined ? causeText(e.cause) : undefined)
       return e?.lost || e?.failed || e?.stopped ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${typeof why === 'string' ? `: ${why}` : ''}.`)
     }
     if (turn.status === 'cancelled') {

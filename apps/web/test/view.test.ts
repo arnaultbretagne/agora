@@ -205,6 +205,30 @@ test('U9 an execution ended with an anchor, then a message: the Create carries t
   assert.equal(after.at(-1), 'Session restored with Mock agent: the agent remembers the history above.')
 })
 
+test('U121 an execution lost or ended: each cause in words, an end of the earlier contract as before', () => {
+  const ended = (cause?: Record<string, unknown>) => noticeText({ type: 'execution.ended', reason: 'claim_missing', ...(cause ? { cause } : {}) }, false)
+  assert.equal(ended({ kind: 'bound_reached' }), 'The sandbox has ended: it reached its time bound during the turn.')
+  assert.equal(ended({ kind: 'lease_expired', turn: 'ended' }), 'The sandbox has ended: its lease expired after the turn.')
+  assert.equal(ended({ kind: 'lease_expired', turn: 'running' }), 'The sandbox has ended: its lease expired during the turn, not renewed.')
+  assert.equal(ended({ kind: 'lease_expired', turn: 'none' }), 'The sandbox has ended: its lease expired before any turn.')
+  assert.equal(ended({ kind: 'adapter_exited', exitCode: 3, signal: null }), "The sandbox has ended: the agent's process had exited with code 3.")
+  assert.equal(ended({ kind: 'adapter_exited', exitCode: null, signal: 'SIGKILL' }), "The sandbox has ended: the agent's process had been killed by SIGKILL.")
+  assert.equal(ended({ kind: 'oom_killed' }), 'The sandbox has ended: its Pod was killed for lack of memory (OOMKilled).')
+  assert.equal(ended({ kind: 'pod_gone', pod: null }), 'The sandbox has ended: its Pod was gone before its deadline.')
+  assert.equal(ended({ kind: 'pod_gone', pod: 'Evicted' }), 'The sandbox has ended: its Pod was gone before its deadline (Evicted).')
+  assert.equal(ended({ kind: 'stopped' }), 'The sandbox has ended: it was stopped.')
+  assert.equal(ended({ kind: 'agent_failed' }), 'The sandbox has ended: the agent had stopped on an internal error.')
+  assert.equal(ended({ kind: 'not_obtained' }), 'The sandbox has ended: it was never obtained.')
+  assert.equal(ended({ kind: 'unobserved' }), 'The sandbox has ended: its claim was gone before Agora could see why.')
+  // Written before causes were, or a cause this client does not know: no cause said.
+  assert.equal(ended(), 'The sandbox has ended.')
+  assert.equal(ended({ kind: 'something_new' }), 'The sandbox has ended.')
+  const lost = (fields: Record<string, unknown>) => noticeText({ type: 'execution.lost', reason: 'adapter_exited', ...fields }, false)
+  assert.equal(lost({ exitCode: 3, signal: null }), "The agent's process exited with code 3. The history is kept.")
+  assert.equal(lost({ exitCode: null, signal: 'SIGKILL' }), "The agent's process was killed by SIGKILL. The history is kept.")
+  assert.equal(lost({}), "The agent's process exited. The history is kept.")
+})
+
 test('U10 each notice type: its text', () => {
   const notices = messagesOf(at(last))
     .filter((m) => m.role === 'system')

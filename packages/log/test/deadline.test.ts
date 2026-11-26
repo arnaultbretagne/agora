@@ -37,7 +37,7 @@ test('C81 control: a token far from its end is not renewed', () => {
   assert.equal(tokenDue(3_600_000, 1_800_001, 3600), true)
 })
 
-test('E40 work is what the bridge did not list as the first prompt left, whatever the clocks', () => {
+test('E46 work is what the bridge did not list as the first prompt left, whatever the clocks', () => {
   const harness = { pid: 12, startedAt: '2026-11-26T10:45:20.010Z' }
   // Started 27 ms "before" the prompt's time in another clock: still work, since the baseline did not list it.
   const sh = { pid: 37, parent: 29, command: 'sh', startedAt: '2026-11-26T10:45:21.279Z' }

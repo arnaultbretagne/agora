@@ -323,7 +323,7 @@ parallel.push((async () => {
     return `destroyed by Agent Sandbox; anchor ${String(end.content.anchor)} pushed by the Pod`
   })
 })())
-parallel.push(check('E36', 'A turn longer than the turn cap a Create names', async () => {
+parallel.push(check('E42', 'A turn longer than the turn cap a Create names', async () => {
   const w = new Workstream()
   await w.open(mock, { limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
   assert((await w.write('/sleep 120')).status === 200, 'Write refused')
@@ -335,7 +335,7 @@ parallel.push(check('E36', 'A turn longer than the turn cap a Create names', asy
   await w.stop()
   return `turn ${turn.status} after 120 s, deadline ${String(x.shutdownTime)}, neither ending nor lost`
 }))
-parallel.push(check('E38', 'Work running at the ceiling', async () => {
+parallel.push(check('E44', 'Work running at the ceiling', async () => {
   const w = new Workstream()
   await w.open(mock, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
   assert((await w.write('/background 600 never.txt')).status === 200, 'Write refused')

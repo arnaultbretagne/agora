@@ -233,6 +233,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | Receive | Hand each received line to the log, with its connection and receive ordinal, and read nothing more until the log has committed it. |
 | Send | A line, on the connection the log names, only when asked; the write's callback settles the request. |
 | Hold | No new connection, the open one terminated: an execution lost or failed. |
+| Pods | While no connection to a claim's bridge is open, the claim neither being deleted nor past its `shutdownTime`: GET its Pod every 2 s, and at once after a close other than 1000 or 1011. A container `terminated` with reason `OOMKilled` counts whenever a read sees it, the claim still the same: the deadline's deletion ends a Pod by SIGTERM, never by the kernel's OOM killer. Anything else a read sees — no Pod, a deletion, another reason — counts only when, as it completes, the claim is still the same, not being deleted, and still more than 5 s from its deadline: closer, Agent Sandbox may already be deleting the Pod for that deadline before the watch says so. Keep, with when it was seen, what made the Pod end before its time — its container's `terminated.reason` and exit code, else the Pod's own `reason` (`Evicted`), else `Deleted` once it has a `deletionTimestamp`, or no Pod at all — and stop looking once one is known. Keep the last claim seen once it has disappeared. Both go to the log when it ends the execution ("How an execution ended"). |
 | Warm | Every 5 seconds, list the pools' Sandboxes; hand each ready one a warm token, and renew it, until a claim binds it (`credentials.md`). |
 | Bridge routes | `GET /info`, `PUT /anchor`, `PUT /credentials`, on the log's request. |
 | Anchors | Verify a Pod's projected token, and find the claim bound to that Pod. |
@@ -308,7 +309,31 @@ Each state is read from the log, and from the claim for its readiness and its en
 | **ending** | The infrastructure is deleting the claim; the anchor is expected. | `deletionTimestamp` on the claim, or its deadline passed. |
 
 The execution ends with `execution.ended` once its claim has disappeared; the entry names the
-anchor received, if any.
+anchor received, if any, and the cause.
+
+### How an execution ended
+
+When its claim disappears, the log names why in `execution.ended` (`log.md`, "Entries"): the first
+cause below that applies, from its own entries, the last claim the mechanics saw — its `shutdownTime`
+and `deletionTimestamp` — and what they saw of its Pod ("The mechanics", Pods). The thread says it
+(`assistant-ui.md`, "The exchanges"), and so does the message to a delegate's delegator
+(`delegation.md`, "What Agora writes").
+
+| Cause | When | With it |
+| --- | --- | --- |
+| `adapter_exited` | Its `execution.lost` is `adapter_exited`: the adapter exited, the bridge closed 1011, Agora moved the deadline to now. | `exitCode` and `signal`, as the bridge's `GET /info` gave them when the close came; null when it could not say. |
+| `agent_failed` | Its `execution.lost` is `agent_failed` (JSON-RPC `-32603`). | — |
+| `oom_killed` | Its Pod was seen with its container `terminated`, reason `OOMKilled`: killed for lack of memory. | — |
+| `not_obtained` | No claim of it was seen, and the log holds no claim's UID for it: no claim was ever obtained — its creation refused until its initial deadline, for instance. | — |
+| `unobserved` | No claim of it was seen, a UID recorded: the claim was gone before this process saw it — whether Agora was running meanwhile is not known. | — |
+| `pod_gone` | Its Pod was seen ending before the deadline — terminated, evicted, deleted, or not found —, or the claim was deleted more than 1.5 s before its `shutdownTime`. | `pod`: the Pod's reason, null when no Pod was found. |
+| `stopped` | The person's Stop: the deadline it was left with passed. | — |
+| `bound_reached` | The deadline it reached was the ceiling — what "The deadline" caps every move at, its last instruction plus its ceiling, approvals' waits counted —, within 1.5 s: during a turn, while work left running ran, or a lease cut short by it. | — |
+| `lease_expired` | Otherwise: the lease ran out, nothing renewing it. | `turn`: `running` (a turn running, no renewal — the bridge not connected), `ended` (after the turn), `none` (no turn dispatched). |
+
+A container `OOMKilled` counts for `oom_killed` whenever it was seen. What else was seen of a Pod counts for `pod_gone` only when seen more than 5 s before the deadline the claim reached: a Pod gone, deleted or ended otherwise within 5 s of its deadline is taken for that deadline's. The bound is the one rule "The deadline" sets: a change of that rule changes what `bound_reached`
+compares with, not the cause. After a restart, what the mechanics saw of a Pod before it is not kept:
+the cause is then read from the claim alone.
 
 ### Receiving an anchor
 
@@ -404,12 +429,18 @@ writing NAME in the workspace after N seconds), reads a file of its workspace (`
 | E33 | claude-code, opencode and codex, each in a new Session, asked where their access is written | Each answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
 | E34 | Real harness (antigravity) | Real `initialize` and `session/new` on a warm Pod; a turn on the cluster's Google login through the gateway, its only ways out `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com`; anchor pushed, then restored, the agent remembers. |
 | E35 | antigravity in a new Session, asked where its access is written | It answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
-| E36 | A turn of 120 s (`/sleep 120`), the Create naming `turnCapSeconds` 30 | The turn ends with its answer, `Slept 120 s.`; its deadline moved on past 30 s and past the lease; the execution `ready`, neither `ending` nor `lost`. |
-| E37 | A command the agent leaves running after its turn (`/background`), longer than the lease; a prompt once it has ended | The deadline moves every minute while it runs, the claim still there past the lease the end of the turn granted; once it has ended, now + lease, once, then no more renewal; the prompt reaches the same Pod and reads the command's output file. |
-| E38 | Work still running at the ceiling since the last prompt | The deadline reaches the ceiling and never goes beyond; the infrastructure destroys the sandbox there; the execution ends, its anchor received. |
-| E40 | The Create's own message starts a command at once (`/background`), as the Session opens | The first prompt's dispatch records the bridge's listing, without the command; the command is work: the deadline moves on past the lease while it runs. |
-| E41 | A message taken into a running turn (`_session/steering` answered `injected`) after the turn's start, the ceiling 30 s | The deadline moves past the turn's start + ceiling, never past the message's + ceiling; the turn ends with its answer. |
-| E39 | `GET /info` with only the adapter running, while a command it started runs, once that command has ended | No process; then the command's shell and its `sleep`, each with its parent and a start after the prompt, never the adapter; then none. |
+| E36 | A delegate's turn running past its ceiling (30 s, `/sleep 120`) | Its last deadline the turn's start + 30 s; `execution.ended` at or after it, cause `bound_reached`; its notice the same; one message to its delegator, `Its turn failed: its sandbox reached its time bound.` |
+| E37 | A delegate's turn done, then nothing (lease 60 s) | `execution.ended` at least 59 s after the answer, cause `lease_expired`, `turn` `ended`; its notice the same; its last message reached its delegator, and no message of Agora's. |
+| E38 | A delegate's adapter exits with code 3 during a turn (`/die`) | `execution.lost` `adapter_exited`, `exitCode` 3, `signal` null, its notice the same; one message to its delegator, `Its execution was lost: the agent's process exited with code 3.`; then `execution.ended`, cause `adapter_exited` with the same exit. |
+| E39 | A delegate's Pod killed for lack of memory during a turn: its container `OOMKilled`, its bridge dead on the spot; then its deadline. The kill reported only 3 s on, within 5 s of a deadline 6 s on; a read begun just before the margin's end, answered within it; an `OOMKilled` and another end, each seen 4 s before a turn's bound | `execution.ended`, cause `oom_killed`, no anchor; its notice the same; one message to its delegator, `Its turn failed: its Pod was killed for lack of memory (OOMKilled).` Reported within the margin: the same, the Pod seen within 5 s of the deadline. The read across the margin's start: kept; a Pod not found within the margin: not. Seen 4 s before the bound: `oom_killed` for the OOM, `bound_reached` for the other end. |
+| E40 | A delegate's Pod deleted during a turn, its claim left until its deadline; another's claim deleted before its deadline; a Pod read begun some 80 ms before the 5 s margin, answered "no Pod" 140 ms later, the watch silent; that answer seen within the margin before the deadline reached | Each `execution.ended`, cause `pod_gone`, `pod` null — the second at once, well before its deadline; its notice the same; one message to its delegator, `Its turn failed: its Pod was gone before its deadline.` The read in flight: nothing kept, nor by the reads within the margin after it; the same answer a minute before the deadline kept, with its time. Seen within the margin: `bound_reached` for a turn at its bound; seen 5 s before or earlier: `pod_gone`. |
+| E41 | A delegate's claim never obtained: its creation refused until its initial deadline | `execution.failed` `startup_failed`, then `execution.ended` at or after the initial deadline, cause `not_obtained`; its notice the same; no claim of it created; one message to its delegator, `Its execution could not start.` |
+| E42 | A turn of 120 s (`/sleep 120`), the Create naming `turnCapSeconds` 30 | The turn ends with its answer, `Slept 120 s.`; its deadline moved on past 30 s and past the lease; the execution `ready`, neither `ending` nor `lost`. |
+| E43 | A command the agent leaves running after its turn (`/background`), longer than the lease; a prompt once it has ended | The deadline moves every minute while it runs, the claim still there past the lease the end of the turn granted; once it has ended, now + lease, once, then no more renewal; the prompt reaches the same Pod and reads the command's output file. |
+| E44 | Work still running at the ceiling since the last prompt | The deadline reaches the ceiling and never goes beyond; the infrastructure destroys the sandbox there; the execution ends, cause `bound_reached`, its anchor received. |
+| E45 | `GET /info` with only the adapter running, while a command it started runs, once that command has ended | No process; then the command's shell and its `sleep`, each with its parent and a start after the prompt, never the adapter; then none. |
+| E46 | The Create's own message starts a command at once (`/background`), as the Session opens | The first prompt's dispatch records the bridge's listing, without the command; the command is work: the deadline moves on past the lease while it runs. |
+| E47 | A message taken into a running turn (`_session/steering` answered `injected`) after the turn's start, the ceiling 30 s | The deadline moves past the turn's start + ceiling, never past the message's + ceiling; the turn ends with its answer. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).
@@ -429,7 +460,7 @@ The cases the log took over keep their IDs, for the runs that showed them before
 | E28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. |
 
 The case the ceiling replaced keeps its ID, for the runs that showed it before
-(`reliability/executions.md`): its Expected no longer holds, and E36 and E38 say what does.
+(`reliability/executions.md`): its Expected no longer holds, and E42 and E44 say what does.
 
 | ID | Case | Expected |
 | --- | --- | --- |

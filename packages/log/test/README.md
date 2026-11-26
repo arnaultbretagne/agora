@@ -21,8 +21,8 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `storage.test.ts` | Roles and migrations: L25, L27. |
 | `telemetry.test.ts` | The operational logs: L28. |
 | `executions.test.ts` | E3, E4, E12, E13. |
-| `lifetime.test.ts` | How long a sandbox lives, side by side on a 60 s lease: a turn past the turn cap a Create names, work left running after the turn, the ceiling, nothing left running, the Create's own message starting a command, a message taken into a running turn: E14, E36–E38, E40, E41. |
-| `deadline.test.ts` | The deadline's and the token's arithmetic over six hours with production's values, and work told from the harness by the bridge's listings: C81, E40. |
+| `lifetime.test.ts` | How long a sandbox lives, side by side on a 60 s lease: a turn past the turn cap a Create names, work left running after the turn, the ceiling, nothing left running, the Create's own message starting a command, a message taken into a running turn: E14, E42–E44, E46, E47. |
+| `deadline.test.ts` | The deadline's and the token's arithmetic over six hours with production's values, and work told from the harness by the bridge's listings: C81, E46. |
 | `credentials.test.ts` | The execution's token before `initialize`, its renewal before a prompt and while its sandbox outlives it, the Create's profiles, those offered, the MCP servers they open: C10, C12, C14, C20, C43, C81. |
 | `settings.test.ts` | A Session's settings and commands, Configure, the catalogue's, a pool's first Session: L47–L53, L185. |
 | `scope.test.ts` | Scope and the token that follows it, across a restart and its pool replaced: C17–C19, C21, C76–C78, L54, L55. |

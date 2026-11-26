@@ -17,7 +17,7 @@ function lastSaid(entries: readonly Entry[]): string | undefined {
 }
 
 describe('a sandbox’s life', { concurrency: true }, () => {
-  it('E36 a turn of 120 s, the Create naming a turn cap of 30 s: it ends with its answer, the execution ready, neither ending nor lost', { timeout: 240_000 }, async (t) => {
+  it('E42 a turn of 120 s, the Create naming a turn cap of 30 s: it ends with its answer, the execution ready, neither ending nor lost', { timeout: 240_000 }, async (t) => {
     const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
     assert.ok((await lab.write(ws, '/sleep 120')).accepted)
     const prompt = Date.parse(lines(await lab.entries(ws), 'out', 'session/prompt').at(-1)!.time)
@@ -38,7 +38,7 @@ describe('a sandbox’s life', { concurrency: true }, () => {
     assert.equal(view.state, 'ready')
   })
 
-  it('E37 a command left running after its turn: the deadline moves while it runs, its output is there for the next prompt on the same Pod, then one lease and nothing more', { timeout: 200_000 }, async (t) => {
+  it('E43 a command left running after its turn: the deadline moves while it runs, its output is there for the next prompt on the same Pod, then one lease and nothing more', { timeout: 200_000 }, async (t) => {
     const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
     const pod = lab.executions.claimOf(e.id)?.status?.sandbox?.name
     assert.ok((await lab.write(ws, '/background 70 out.txt')).accepted)
@@ -73,7 +73,7 @@ describe('a sandbox’s life', { concurrency: true }, () => {
     assert.equal((await lab.state(ws)).current?.id, e.id)
   })
 
-  it('E38 work running beyond the ceiling since the last prompt: the deadline never beyond it, and the execution ends there, its anchor received', { timeout: 120_000 }, async (t) => {
+  it('E44 work running beyond the ceiling since the last prompt: the deadline never beyond it, and the execution ends there, its anchor received', { timeout: 120_000 }, async (t) => {
     const { lab, ws, e } = await opened(t, { receiver: true, workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
     assert.ok((await lab.write(ws, '/background 600 never.txt')).accepted)
     await lab.turn(ws, 'done')
@@ -88,9 +88,11 @@ describe('a sandbox’s life', { concurrency: true }, () => {
     assert.equal(Date.parse(patches.at(-1)!.shutdownTime), cap)
     assert.ok(Date.parse(end.time) >= cap && Date.parse(end.time) < cap + 10_000, end.time)
     assert.equal(typeof end.content.anchor, 'string')
+    // No turn ran: the ceiling, reached while work ran, is the bound its end names.
+    assert.deepEqual(end.content.cause, { kind: 'bound_reached' })
   })
 
-  it('E40 the Create’s own message starts a command at once: work, not the harness’s, and the deadline moves past the lease while it runs', { timeout: 150_000 }, async (t) => {
+  it('E46 the Create’s own message starts a command at once: work, not the harness’s, and the deadline moves past the lease while it runs', { timeout: 150_000 }, async (t) => {
     // The first prompt leaves as the Session opens: the command starts within milliseconds of it.
     const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 }, prompt: [{ type: 'text', text: '/background 75 first.txt' }] })
     await lab.turn(ws, 'done')
@@ -104,7 +106,7 @@ describe('a sandbox’s life', { concurrency: true }, () => {
     assert.ok(lab.kube.deadlines.filter((d) => d.name === e.claimName && d.at > answered + 60_000).length > 0, 'renewed past the lease')
   })
 
-  it('E41 a message taken into a running turn is the last prompt: the ceiling counts from it', { timeout: 120_000 }, async (t) => {
+  it('E47 a message taken into a running turn is the last prompt: the ceiling counts from it', { timeout: 120_000 }, async (t) => {
     const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
     // 40 s: past the first prompt's ceiling, within the message's, 18 s on.
     assert.ok((await lab.write(ws, '/sleep 40')).accepted)

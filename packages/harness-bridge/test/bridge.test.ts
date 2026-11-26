@@ -106,7 +106,7 @@ describe('bridge', () => {
     assert.deepEqual(client.binary, [false])
   })
 
-  it('E39 GET /info lists what the agent left running under the adapter, never the adapter, and nothing once it has ended', async () => {
+  it('E45 GET /info lists what the agent left running under the adapter, never the adapter, and nothing once it has ended', async () => {
     const target = await lab()
     const client = await connect(target)
     await initialize(client)
