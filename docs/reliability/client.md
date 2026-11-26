@@ -55,6 +55,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R47 | 2026-11-20 | `3463a8e` | local | The `check` job of pull request #229 (GitHub Actions job 136477061123), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell 153. U34, U35, U44 and U93 in Chromium against the server, the lab's executions behind it. |
 | R48 | 2026-11-20 | `3bc2451` | local | The `check` job of pull request #229 (GitHub Actions job 136569971272), all green — V6 skipped, no Docker there: Node 24, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell, on the merge of `main` with the access picker (#216). U34, U35, U44 and U93 in Chromium against the server, the lab's executions behind it. |
 | R49 | 2026-11-25 | `ea491b4` | unit | The `check` job of the push to `feat/base-profiles-pool-only` (GitHub Actions job 139340567021), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell. The `check` job of pull request #240 on the same commit (139340698404), all green too. |
+| R50 | 2026-11-26 | `bbb3c64` | unit | `npm test` of `@agora/web`: Node 24.22.3. |
 
 ## Cases
 
@@ -275,6 +276,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U35 | — | local | R48 | proven | The two Scopes `github:owner/a:write`, `github:owner/b:read`, `internet`, `agora:read`, `previews`, then the same with `agora:delegate` before the defaults. |
 | U44 | — | local | R48 | proven | The Create's `profiles` `github:owner/a:write`, `github:owner/b:read`, `agora:read`, `previews`; the Scope the same with `internet` before the defaults. |
 | U93 | — | local | R48 | proven | The Create posted with `profiles` `internet`, `agora:delegate`; kept with `internet`, `agora:delegate`, `agora:read`, `previews`. |
+| U121 | — | unit | R50 | proven | Every cause's words after "The sandbox has ended: ", `lease_expired` in its three turns, `pod_gone` with and without its reason; the three losses `adapter_exited`; "The sandbox has ended." with no cause and with an unknown one. |
 
 ## Not covered
 
