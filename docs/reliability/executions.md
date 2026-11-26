@@ -20,12 +20,14 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | R12 | 2026-10-31 | `3bbe489` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:774ba830…` and the pool `mock-8315d36582ec`, built from that commit (infra-k8s #313); the template at 1 CPU and 4 GiB (infra-k8s #312). `apps/server/scripts/live-cases.ts` from that commit, on the server Pod's address. |
 | R13 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. E31 and E33, on the new adapters. |
 | R14 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. E30, E31 and E33, on the new harnesses (agora #204, infra-k8s #358). |
+| R15 | 2026-11-26 | `1682d89` | local | The `check` job of pull request #245 (GitHub Actions job 139807696571), all green: ubuntu-26.04, Node 24, PostgreSQL 17 (`postgres:17`), each test on a database of its own; real bridges with the mock agent, FakeKube; a 60 s lease and a 1 s renewal step for the deadline cases. |
+| R16 | 2026-11-26 | `1682d89` | local | The preview of pull request #245, `pr-245-agora.preview.bretagne.dev`: its server built from `47b3e86` or a later push of the pull request (the server's code is the same through `1682d89`), `LEASE_SECONDS` 600 and the renewal step of production; its sandboxes the mock agent behind a bridge in the server's process, Kubernetes simulated. Driven through its API by a script of the pull request's author, its raw output in the pull request. |
 
 ## Cases
 
 E5 to E11 and E28 are the cases `specs/executions.md` keeps from before the log took them over:
 what they covered is the log's now, with its own cases (`log.md`). Their rows are evidence for
-`7afc4d7`.
+`7afc4d7`. E15 is the case the ceiling replaced: its rows are evidence for the commits of their runs.
 
 | Case | Failure | Level | Run | Verdict | Observed |
 | --- | --- | --- | --- | --- | --- |
@@ -54,13 +56,18 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E12 | — | local | R3 | proven | Two tests: moving forward at each step, never beyond start + maximum duration. |
 | E12 | — | cluster | R4 | partial: one move is asserted, not one per step | Deadline 14:06:25.055 → 14:06:45.827 during the turn, under the limit. |
 | E12 | — | cluster | R8 | partial: one move is asserted, not one per step | The deadline moved from 09:13:46.044 to 09:14:06.632 during the turn. |
+| E12 | — | local | R15 | proven | Two tests: moving forward at each step; never beyond the last prompt + a 30 s ceiling. |
 | E13 | — | cluster | R1 | partial: the deadline's value is not asserted | Deadline set at the end of the turn, unchanged 25 s later. |
 | E13 | — | local | R3 | proven | Every assertion held. |
 | E13 | — | cluster | R4 | partial: the deadline's value is not asserted | Deadline set at the end of the turn, unchanged 25 s later. |
 | E13 | — | cluster | R8 | partial: the deadline's value is not asserted | The deadline set at the end of the turn, unchanged 25 s later. |
+| E13 | — | local | R15 | proven | Every assertion held. |
+| E13 | — | local | R16 | partial: observed by the script, not asserted | Lease 60 s: turn answered by 09:21:09.338, deadline 09:22:08.384, unchanged at every look, 5 s apart, until the execution ended. |
 | E14 | real: the deadline passes between two turns | cluster | R1 | proven | Destroyed by Agent Sandbox; anchor pushed (1 file, 239 bytes). |
 | E14 | real: the deadline passes between two turns | cluster | R4 | proven | Destroyed by Agent Sandbox; anchor pushed by the Pod. |
 | E14 | real: the deadline passes between two turns | cluster | R8 | proven | Destroyed by Agent Sandbox; the anchor pushed by the Pod. |
+| E14 | real: the deadline passes between two turns, nothing left running | local | R15 | proven | No renewal after the turn's; ended 59 to 70 s after the turn, its anchor received. |
+| E14 | real: the deadline passes between two turns, nothing left running | local | R16 | partial: observed by the script, not asserted | Lease 60 s: no longer followed and `ended` 62 s after the turn, anchor `badaf7f6-b24b-5eae-8294-8883060e185c`. |
 | E15 | real: the turn reaches its 30 s maximum | cluster | R1 | partial: the time of destruction is not asserted | Destroyed with the turn in progress; anchor pushed. |
 | E15 | real: the turn reaches its 30 s maximum | cluster | R4 | partial: the time of destruction is not asserted | Destroyed with the turn in progress, the turn failed; anchor pushed. |
 | E15 | real: the turn reaches its 30 s maximum | cluster | R8 | partial: the time of destruction is not asserted | Destroyed with the turn in progress, the turn failed; an anchor. |
@@ -115,6 +122,12 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E33 | — | live | R14 | proven | claude-code "`~/.agora/access.json`", opencode and codex "~/.agora/access.json", none with a tool call. The control, "read that file and give me its `sub` claim": one tool call each (opencode asked one permission), and each answer held `agora <execution>`. |
 | E34 | — | live | — | not verified | No run: no antigravity pool, no cluster Google login, no gateway route. |
 | E35 | — | live | — | not verified | As E34. Behind a stand-in for Google, agy 1.5.13 put no rule from the workspace's `AGENTS.md` into the model's request (`specs/credentials.md`, "Antigravity"). |
+| E36 | — | local | R15 | proven | Every assertion held: `Slept 120 s.` with `turnCapSeconds` 30 and a 60 s lease, renewals after 90 s, `ready`, the claim not deleted. |
+| E36 | — | local | R16 | partial: observed by the script, not asserted | `turnCapSeconds` 30, lease 60 s, `/sleep 120` from 09:21:07: the deadline 09:22:08 → 09:22:29 → … → 09:23:50 every 20 s, then 09:24:08.626 at the end; `Slept 120 s.`, the turn `done`, the Workstream `ready`, `ending` false throughout, Pod `mock-5`. |
+| E37 | real: a command left running 70 s after its turn | local | R15 | proven | Every assertion held: at least 30 renewals while it ran, the claim alive past the turn's lease, then one or two renewals at its end and none after; `out.txt: Ran 70 s in the background.` on the same Pod. |
+| E37 | real: `/background 1200 out.txt`, a command left running 20 min after its turn | local | R16 | partial: observed by the script, not asserted | Lease 600 s, turn over at 09:20:36, Pod `mock-3`, `sh` and `sleep` listed: the deadline 09:30:35 → 09:32:36 → … → 09:49:36, a minute on at every look; the command gone at t+1201 s, the deadline 09:50:36.526, then unchanged. `/read out.txt` sent at t+1501 s (25 min): `out.txt: Ran 1200 s in the background.`, the same execution on `mock-3`. |
+| E38 | real: work still running at a 30 s ceiling | local | R15 | proven | Every deadline at or before the ceiling, the last at it; ended within 10 s after it, its anchor received. |
+| E39 | — | local | R15 | proven | Every assertion held. |
 
 The partial verdicts are tracked in #107.
 
