@@ -151,11 +151,25 @@ const edge = (page: Page, side: 'top' | 'bottom' | 'left') =>
     }
     return null
   }, side)
-/** The theme toggled, once the page has it. */
+/**
+ * The theme toggled from the account's menu, its item named after the theme it switches to, once the page
+ * has it; on a phone's screen from the drawer, closed again after by a touch beside it.
+ */
 async function toggle(page: Page, to: 'light' | 'dark'): Promise<void> {
-  await page.getByRole('button', { name: to === 'dark' ? 'Dark theme' : 'Light theme' }).click()
+  const drawer = page.viewportSize()!.width < 768
+  if (drawer) await page.getByRole('button', { name: 'Show the workstreams' }).first().click()
+  await page.getByRole('button', { name: 'Account' }).click()
+  await page.getByRole('menuitem', { name: to === 'dark' ? 'Dark theme' : 'Light theme' }).click()
   await page.waitForFunction((dark) => document.documentElement.classList.contains('dark') === dark, to === 'dark')
+  await page.getByRole('menu').waitFor({ state: 'detached' })
+  if (drawer) {
+    const { width } = page.viewportSize()!
+    await page.getByRole('button', { name: 'Close', exact: true }).click({ position: { x: width - 10, y: 400 } })
+    await page.getByRole('button', { name: 'Close', exact: true }).waitFor({ state: 'detached' })
+  }
 }
+/** The theme buttons the header holds: none, the toggle being the account's. */
+const headerThemes = (page: Page) => page.locator('header').locator('[aria-label="Light theme"], [aria-label="Dark theme"]').count()
 const CREAM = 'rgb(250, 249, 245)'
 const DARK = 'rgb(24, 23, 21)'
 
@@ -333,15 +347,32 @@ test('U21 Stop: the state stopped, Stop gone, sending closed with its reason', a
   assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), false)
 })
 
-test('U22 the theme: dark when toggled, kept after a reload; light in another browser', async () => {
+test('U22 the theme: toggled from the account\'s menu, dark, kept after a reload; light in another browser', async () => {
   const page = await fresh()
   await page.goto(`${server.url}/`)
+  await page.getByText('What shall we work on?').waitFor()
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), false)
-  await page.getByRole('button', { name: 'Dark theme' }).click()
+  assert.equal(await headerThemes(page), 0, 'no theme button in the header')
+  // Without the proxy's identity, the account is there all the same, for the theme: no e-mail, no Sign out.
+  // Read before it opens: open, the menu hides the rest of the page from the accessibility tree.
+  assert.equal(await page.getByRole('button', { name: 'Account' }).innerText(), 'Account')
+  // The menu's item says the theme it switches to: dark from the light page.
+  await page.getByRole('button', { name: 'Account' }).click()
+  await page.getByRole('menuitem', { name: 'Dark theme' }).waitFor()
+  assert.equal(await page.getByRole('menuitem', { name: 'Light theme' }).count(), 0, 'light: the item says dark')
+  assert.equal(await page.getByRole('menuitem', { name: 'Sign out' }).count(), 0, 'no Sign out without the identity')
+  await page.keyboard.press('Escape')
+  await page.getByRole('menu').waitFor({ state: 'detached' })
+  await toggle(page, 'dark')
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true)
   await page.reload()
   await page.getByText('What shall we work on?').waitFor()
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true)
+  assert.equal(await headerThemes(page), 0, 'none after the reload either')
+  await page.getByRole('button', { name: 'Account' }).click()
+  await page.getByRole('menuitem', { name: 'Light theme' }).waitFor()
+  assert.equal(await page.getByRole('menuitem', { name: 'Dark theme' }).count(), 0, 'dark: the item says light')
+  await page.keyboard.press('Escape')
   const other = await fresh()
   await other.goto(`${server.url}/`)
   assert.equal(await other.evaluate(() => document.documentElement.classList.contains('dark')), false)
@@ -655,7 +686,7 @@ test('U38 the home-screen frame: the manifest and icon, an opaque status bar, th
   const background = () => page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)
   assert.deepEqual(await colours(), ['#faf9f5', '#faf9f5'], 'the light page, as the system')
   assert.equal(await background(), 'rgb(250, 249, 245)')
-  await page.getByRole('button', { name: 'Dark theme' }).click()
+  await toggle(page, 'dark')
   assert.deepEqual(await colours(), ['#181715', '#181715'], 'the dark theme, against the light system')
   assert.equal(await background(), 'rgb(24, 23, 21)')
 })
@@ -669,6 +700,7 @@ test('U39 a phone: each bar coloured by an edge of its own, in the theme, as it 
   assert.deepEqual(await both(), [{ whole: false, colour: CREAM }, { whole: false, colour: CREAM }], 'the draft: its own edges, the light page')
   // The check sees a container covering the whole screen: at the left edge, the frame is the one found.
   assert.deepEqual(await edge(page, 'left'), { whole: true, colour: CREAM })
+  assert.equal(await headerThemes(page), 0, 'no theme button in the header')
   await toggle(page, 'dark')
   assert.deepEqual(await both(), [{ whole: false, colour: DARK }, { whole: false, colour: DARK }], 'toggled: the dark page')
   await page.getByRole('button', { name: 'Show the workstreams' }).first().click()
@@ -1050,7 +1082,7 @@ test('U50 a question: one box, its text and options; waiting in the list; a note
   assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), true)
 })
 
-test('U52 the proxy’s identity: the person’s e-mail at the sidebar’s foot; opened, Sign out alone; the list the person’s one Workstream, not someone else’s', async () => {
+test('U52 the proxy’s identity: the person’s e-mail at the sidebar’s foot; opened, the theme and Sign out; the list the person’s one Workstream, not someone else’s', async () => {
   const page = await proxied()
   // The person's Workstream and one of someone else's; listed for the question each waits on.
   const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
@@ -1067,7 +1099,7 @@ test('U52 the proxy’s identity: the person’s e-mail at the sidebar’s foot;
   await account.getByText(PERSON).waitFor()
   await account.click()
   assert.equal(await page.getByRole('menuitem', { name: 'Sign out' }).getAttribute('href'), '/oauth2/sign_out?rd=%2F')
-  assert.equal(await page.getByRole('menuitem').count(), 1)
+  assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['Dark theme', 'Sign out'])
   await page.keyboard.press('Escape')
   // The list: the person's one Workstream, which opens.
   await until('the person’s Workstream listed', async () => (await listItems(page).count()) === 1)
