@@ -106,6 +106,31 @@ describe('bridge', () => {
     assert.deepEqual(client.binary, [false])
   })
 
+  it('E39 GET /info lists what the agent left running under the adapter, never the adapter, and nothing once it has ended', async () => {
+    const target = await lab()
+    const client = await connect(target)
+    await initialize(client)
+    const sessionId = await newSession(client, target)
+    const processes = async () =>
+      ((await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as { processes: { pid: number; parent: number; command: string; startedAt: string }[] }).processes
+    assert.deepEqual(await processes(), [], 'the adapter alone: nothing listed')
+    const before = Date.now()
+    assert.equal(((await say(client, 2, sessionId, '/background 2 bg.txt')).result as { stopReason: string }).stopReason, 'end_turn')
+    const running = await processes()
+    assert.ok(running.some((p) => p.command === 'sh') && running.some((p) => p.command === 'sleep'), JSON.stringify(running))
+    // Started by the turn, after the adapter: a start counted in hundredths of a second.
+    for (const p of running) assert.ok(Date.parse(p.startedAt) >= before - 50 && Date.parse(p.startedAt) <= Date.now(), JSON.stringify(p))
+    const sh = running.find((p) => p.command === 'sh')!
+    assert.equal(running.find((p) => p.command === 'sleep')!.parent, sh.pid)
+    assert.equal((await written(join(target.workspace, 'bg.txt'))).toString('utf8'), 'Ran 2 s in the background.\n')
+    let left = running
+    for (let i = 0; i < 40 && left.length > 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      left = await processes()
+    }
+    assert.deepEqual(left, [], 'nothing once the command has ended')
+  })
+
   it('E32 writes the agent’s instructions into the workspace as AGENTS.md, before the adapter starts', async () => {
     const target = await stdio('instructions')
     const expected = readFileSync(INSTRUCTIONS)
