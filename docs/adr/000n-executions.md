@@ -58,9 +58,15 @@ flowchart LR
   in ACP (claude-agent-acp 0.106.0, `async_task_*` updates, code read); Codex and opencode say
   nothing of the kind. Every one of them runs the agent's commands as processes under its adapter,
   which the bridge reads from `/proc`.
-- **What started before the first prompt is the harness's.** claude-agent-acp spawns the Claude
+- **What ran as the first prompt left is the harness's.** claude-agent-acp spawns the Claude
   Code CLI before it answers `session/new` (0.106.0, code read): counted, it would hold every
-  sandbox to the ceiling.
+  sandbox to the ceiling. The bridge's listing as that prompt leaves is the baseline, compared with
+  its later listings on its own clock: compared with a time of the log's, a command the prompt
+  started at once was dated 27 ms before the prompt and left out (the preview of #245,
+  2026-11-26).
+- **The ceiling is absolute.** It counts from the last instruction the agent was given — a turn's
+  start, or a message taken into the running turn — and nothing else, not an approval's wait,
+  pushes it back: an agent left alone ends 6 hours after it was last told something.
 
 Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cases of the lab
 script pass. What each one proves is recorded in `reliability/executions.md`.

@@ -52,8 +52,9 @@ and never beyond the ceiling. How the deadline moves is in "The deadline" (On Ag
 turn stays open until the final response to `session/prompt`. Renewal continues during a silent
 tool or with the browser closed, and once the turn is over, while a process the agent started
 since its first prompt still runs under its adapter (`GET /info`, "What still runs"). No turn has
-a maximum duration of its own. The last prompt's start is in the log, kept across restarts;
-neither ACP events nor reconnections push back the ceiling.
+a maximum duration of its own. The last prompt — a turn's start, or a message the agent took into
+its running turn — is in the log, kept across restarts; nothing else pushes back the ceiling:
+neither ACP events, nor reconnections, nor an approval waiting.
 
 At the ceiling, the infrastructure triggers destruction with the Kubernetes template's
 termination delay, with no additional ACP grace period.
@@ -256,13 +257,15 @@ maximum duration of its own.
 ### The deadline
 
 The log decides each move and keeps each turn's start; the mechanics apply it. The **ceiling** is
-the last prompt's start — the start of the execution's last turn — plus its ceiling, 6 hours by
-default. Every move is bounded by it.
+the last prompt plus the execution's ceiling, 6 hours by default: the last prompt is the start of
+its last turn, or, when later, the answer `injected` to a `_session/steering` that took a message
+into the running turn (`log.md`, "Messages during a turn"). Every move is bounded by it, and
+nothing else pushes it back.
 
 | Moment | `shutdownTime` |
 | --- | --- |
 | Creation | now + lease |
-| Prompt dispatched | Before its first write, a single PATCH: min(now + lease, its start + ceiling); that prompt is now the last. If it fails, the prompt fails (`deadline_refused`) and nothing is sent. |
+| Prompt dispatched | Before its first write, a single PATCH: min(now + lease, its start + ceiling); that prompt is now the last. If it fails, the prompt fails (`deadline_refused`) and nothing is sent. The execution's first prompt waits, before that, for the bridge's listing of what runs (`GET /info`), recorded with its dispatch (`acp.dispatching`, `processes`: each pid and start); while the bridge does not answer, it stays unsent, and the next run tries again. |
 | Every minute of a turn, while connected to the bridge | min(now + lease, ceiling) |
 | End of turn confirmed | min(now + lease, ceiling), once |
 | Every minute once the turn is over, while connected to the bridge and work the agent started still runs | min(now + lease, ceiling) |
@@ -273,15 +276,16 @@ default. Every move is bounded by it.
 
 **Work still running.** Once a turn is over, each time a renewal would be due — at most once a
 minute —, Agora asks the bridge what runs (`GET /info`, "What still runs"). Work runs while it
-lists a process started at or after the start of the execution's first turn: what the harness
-started before — its own processes, the servers it opens with its Session — is not the agent's
-work. A bridge that does not answer renews nothing. Which execution had work running is kept in
+lists a process that its listing at the first prompt's dispatch did not hold — the same pid with a
+start within a second is the same process: what ran then is the harness's own — its processes,
+the servers it opens with its Session —, not the agent's work. Both listings are the bridge's, on
+its clock: no time of the log's is compared with a process's start. An execution whose first
+prompt was dispatched with no listing recorded counts what started since that prompt. A bridge that does not answer renews nothing. Which execution had work running is kept in
 memory: after a restart of Agora, the work it sees running renews as before, and work that ended
 meanwhile ends with the lease already granted.
 
-The ceiling counts the time but the time approvals waited (`delegation.md`, "Approval"): each wait
-since the last prompt, from the approval's Ask to its answer, refusal or expiry, pushes it back by
-as much.
+The ceiling is absolute: an approval waiting (`delegation.md`, "Approval") counts as any other
+time.
 
 The execution's token always outlives the deadline it is given: before each move, Agora hands a new
 one if needed (`credentials.md`, "Between turns").
@@ -403,6 +407,8 @@ writing NAME in the workspace after N seconds), reads a file of its workspace (`
 | E36 | A turn of 120 s (`/sleep 120`), the Create naming `turnCapSeconds` 30 | The turn ends with its answer, `Slept 120 s.`; its deadline moved on past 30 s and past the lease; the execution `ready`, neither `ending` nor `lost`. |
 | E37 | A command the agent leaves running after its turn (`/background`), longer than the lease; a prompt once it has ended | The deadline moves every minute while it runs, the claim still there past the lease the end of the turn granted; once it has ended, now + lease, once, then no more renewal; the prompt reaches the same Pod and reads the command's output file. |
 | E38 | Work still running at the ceiling since the last prompt | The deadline reaches the ceiling and never goes beyond; the infrastructure destroys the sandbox there; the execution ends, its anchor received. |
+| E40 | The Create's own message starts a command at once (`/background`), as the Session opens | The first prompt's dispatch records the bridge's listing, without the command; the command is work: the deadline moves on past the lease while it runs. |
+| E41 | A message taken into a running turn (`_session/steering` answered `injected`) after the turn's start, the ceiling 30 s | The deadline moves past the turn's start + ceiling, never past the message's + ceiling; the turn ends with its answer. |
 | E39 | `GET /info` with only the adapter running, while a command it started runs, once that command has ended | No process; then the command's shell and its `sleep`, each with its parent and a start after the prompt, never the adapter; then none. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's

@@ -119,7 +119,7 @@ first answer counts.
 | For that call alone | An approval starts that delegate, that once; the next call beyond the delegator's rights asks again. |
 | One at a time | A call needing approval while another approval of the delegator's Workstream waits is refused, `approval_pending`. |
 | The call kept open | A `spawn_agent` call answers in an SSE stream: while Agora holds it, a progress notification every 30 s, then the call's answer (`mcp.md`, "The path"). |
-| The delegator's turn | While an approval waits, the ceiling's clock stops (`executions.md`, "The deadline"). |
+| The delegator's turn | An approval's wait counts against the ceiling as any time does: it pushes back no deadline (`executions.md`, "The deadline"). |
 | Matching | The approval names the tool line it gates. Claude Code: the delegator's tool line whose `toolCallId` is the call's `_meta` `claudecode/toolUseId`. The others: the delegator's last tool line still running whose title names `spawn_agent` and whose `rawInput` equals the call's arguments. Looked for up to 2 s, a harness giving its line just after its call. Without a match, it names none. |
 
 ## Acceptance cases
@@ -130,7 +130,7 @@ first answer counts.
 | D5 | A delegator at depth 3; a delegator with three delegates working; four calls at once | `depth_exceeded`; `too_many_delegates`; no Workstream created; three started, one `too_many_delegates`. |
 | D6 | Rights beyond the delegator's; Approve | The call held; an approval in the delegator's Workstream, one option; after Approve, `started`. |
 | D7 | The person writes while the approval waits | The call answers `refused` with the words; no prompt sent; no delegate. |
-| D8 | No answer | `expired` at 4 min 30 s; a progress notification every 30 s before; the delegator's deadline, at the ceiling, pushed back by the wait. |
+| D8 | No answer | `expired` at 4 min 30 s; a progress notification every 30 s before; the delegator's deadline never beyond the last prompt + the ceiling, the wait counted. |
 | D9 | Another call needing approval while one waits | `approval_pending`. |
 | D15 | Live, each harness — Claude Code, Codex, opencode — given `agora:delegate`, delegating a task within its rights | `started`; the delegate answers; its last message reaches the delegator, which uses it. |
 | D16 | Live, each harness calling `spawn_agent` beyond its rights | The approval names the delegator's `spawn_agent` tool line, by its id on Claude Code and by its arguments on the others. |
