@@ -51,7 +51,7 @@ python3 -c 'import ssl, sqlite3, venv; print(ssl.OPENSSL_VERSION)'
 uv --version
 uvx --version
 ruff --version
-mkdir -p /tmp/py && printf 'import os\n\n\nprint(os.sep)\n' > /tmp/py/ok.py
+mkdir -p /tmp/py && printf 'import os\n\nprint(os.sep)\n' > /tmp/py/ok.py
 (cd /tmp/py && ruff check ok.py && ruff format --check ok.py)
 uv venv --quiet /tmp/py/venv && /tmp/py/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 13)'
 
@@ -64,7 +64,7 @@ test "$CARGO_HOME" = /home/harness/.cargo || fail "CARGO_HOME is $CARGO_HOME"
 if touch "$RUSTUP_HOME/smoke" 2>/dev/null; then fail "RUSTUP_HOME is writable"; fi
 mkdir -p /tmp/hello/src
 printf '[package]\nname = "hello"\nversion = "0.1.0"\nedition = "2021"\n' > /tmp/hello/Cargo.toml
-printf 'fn main() {\n    println!("hello from {}", "rust");\n}\n' > /tmp/hello/src/main.rs
+printf 'fn main() {\n    let who = "rust";\n    println!("hello from {who}");\n}\n' > /tmp/hello/src/main.rs
 (cd /tmp/hello && cargo fmt --check && cargo clippy --offline --quiet -- -D warnings && cargo build --offline --quiet)
 test "$(/tmp/hello/target/debug/hello)" = 'hello from rust' || fail "the Rust binary"
 test -d "$CARGO_HOME" || fail "cargo wrote nothing under CARGO_HOME"

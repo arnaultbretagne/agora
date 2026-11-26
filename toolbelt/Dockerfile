@@ -35,7 +35,7 @@ RUN mkdir -p /out/bin \
 ADD --checksum=sha256:b56ceb4fc1d8f0c49b7bd4dc91cd176bad7b86a88b9fc509bae6b10b3ee36692 \
     https://github.com/astral-sh/python-build-standalone/releases/download/20261124/cpython-3.13.18%2B20261124-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz python.tar.gz
 RUN tar -xzf python.tar.gz -C /opt \
-    && ln -s python3 /opt/python/bin/python \
+    && ln -sf python3 /opt/python/bin/python \
     && test "$(/opt/python/bin/python3 --version)" = 'Python 3.13.18'
 
 # Rust 1.100.0 (stable on 2026-11-12), the minimal profile plus clippy and rustfmt: the dist's tarballs, checked
