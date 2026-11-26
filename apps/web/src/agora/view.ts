@@ -296,6 +296,39 @@ const REQUEST: Record<string, string> = {
   transport_error: 'A message could not reach the sandbox.',
 }
 
+/** How the agent's process ended, with the bridge's exit code or signal when known. */
+function exited(exitCode: unknown, signal: unknown, had: boolean): string {
+  const verb = had ? 'had ' : ''
+  if (typeof signal === 'string' && signal !== '') return `the agent's process ${had ? 'had been' : 'was'} killed by ${signal}`
+  if (typeof exitCode === 'number') return `the agent's process ${verb}exited with code ${String(exitCode)}`
+  return `the agent's process ${verb}exited`
+}
+
+/** Why the sandbox ended (docs/specs/assistant-ui.md, "The exchanges"); null for an end that names no cause. */
+function causeText(cause: Json | null): string | null {
+  if (cause === null) return null
+  switch (cause.kind) {
+    case 'bound_reached':
+      return 'it reached its time bound during the turn'
+    case 'lease_expired':
+      return cause.turn === 'running' ? 'its lease expired during the turn, not renewed' : cause.turn === 'none' ? 'its lease expired before any turn' : 'its lease expired after the turn'
+    case 'adapter_exited':
+      return exited(cause.exitCode, cause.signal, true)
+    case 'agent_failed':
+      return 'the agent had stopped on an internal error'
+    case 'oom_killed':
+      return 'its Pod was killed for lack of memory (OOMKilled)'
+    case 'pod_gone':
+      return `its Pod was gone before its deadline${typeof cause.pod === 'string' && cause.pod !== '' ? ` (${cause.pod})` : ''}`
+    case 'stopped':
+      return 'it was stopped'
+    case 'unobserved':
+      return 'it ended while Agora was not running'
+    default:
+      return null
+  }
+}
+
 /** A Session's end says nothing the execution's own notice does not, unless another replaced it. */
 export const shownNotice = (notice: Json): boolean => notice.type !== 'session.ended' || notice.reason === 'replaced'
 
@@ -324,12 +357,16 @@ export function noticeText(notice: Json, first: boolean): string {
       return 'The connection to the sandbox was interrupted.'
     case 'request.failed':
       return REQUEST[reason] ?? 'A request to the agent failed.'
-    case 'execution.lost':
-      return `${LOST[reason] ?? 'The sandbox was lost'}. The history is kept.`
+    case 'execution.lost': {
+      const lost = reason === 'adapter_exited' ? exited(notice.exitCode, notice.signal, false) : null
+      return `${lost === null ? (LOST[reason] ?? 'The sandbox was lost') : lost.charAt(0).toUpperCase() + lost.slice(1)}. The history is kept.`
+    }
     case 'execution.failed':
       return `${FAILED[reason] ?? 'The execution could not start'}.`
-    case 'execution.ended':
-      return 'The sandbox has ended.'
+    case 'execution.ended': {
+      const cause = causeText(json(notice.cause) ?? null)
+      return cause === null ? 'The sandbox has ended.' : `The sandbox has ended: ${cause}.`
+    }
     default:
       return text(notice.type)
   }
