@@ -2,7 +2,7 @@
 // running does, never beyond the ceiling since the last prompt, one lease once nothing runs. Each test waits out real
 // minutes on a 60 s lease and a 1 s renewal step: they run side by side.
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import type { Entry } from '../src/index.ts'
@@ -56,13 +56,15 @@ describe('a sandbox’s life', { concurrency: true }, () => {
     // Once the command has ended: one lease from then, then no more renewal.
     const path = join(lab.kube.bridges.get(pod!)!.workspace, 'out.txt')
     await until('its output', () => existsSync(path), 20_000)
-    const ended = Date.now()
+    // Written as the command ends: a step may still have seen it running, the next sees it gone.
+    const ended = statSync(path).mtimeMs
     await sleep(4_000)
     const after = lab.kube.deadlines.filter((d) => d.name === e.claimName && d.at >= ended)
-    assert.equal(after.length, 1, JSON.stringify(after))
-    assert.ok(Math.abs(Date.parse(after[0]!.shutdownTime) - (after[0]!.at + 60_000)) < 1_000)
+    assert.ok(after.length >= 1 && after.length <= 2, JSON.stringify(after))
+    const last = after.at(-1)!
+    assert.ok(Math.abs(Date.parse(last.shutdownTime) - (last.at + 60_000)) < 1_000)
     await sleep(2_500)
-    assert.equal(lab.kube.deadlines.filter((d) => d.name === e.claimName && d.at >= ended).length, 1)
+    assert.equal(lab.kube.deadlines.filter((d) => d.name === e.claimName && d.at >= ended).length, after.length, 'no renewal once it has ended')
     // The next prompt, on the same Pod, reads what the command wrote.
     assert.ok((await lab.write(ws, '/read out.txt')).accepted)
     await until('read', async () => lastSaid(await lab.entries(ws))?.startsWith('out.txt:'))
