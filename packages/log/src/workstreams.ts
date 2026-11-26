@@ -27,13 +27,14 @@ import type { Delegations } from './delegation.ts'
 import type { Merges } from './merges.ts'
 import type { Notifications } from './notifications.ts'
 import type { FirstSessions } from './first-sessions.ts'
-import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
+import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, type Execution, type PromptCapabilities, type State } from './state.ts'
 import { isRole } from './marks.ts'
 import { roleBlock, type Role } from './roles.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, validate, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
+import { nextDeadline, tokenDue, tokenLife, working } from './deadline.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { answerRefusal, validApproval, validMerge, validQuestion } from './questions.ts'
@@ -149,15 +150,27 @@ export class Workstreams implements Handler {
 
   /** How long an execution's token lasts from when it is handed (docs/specs/credentials.md, `exp`). */
   private tokenLife(e: Execution): number {
-    return Math.max(this.options.tokenSeconds ?? 3600, 3 * this.limitsOf(e).leaseSeconds)
+    return tokenLife(this.options.tokenSeconds ?? 3600, this.limitsOf(e).leaseSeconds)
   }
 
   /**
-   * The ceiling (docs/specs/executions.md, "The deadline"): the last prompt's start plus the execution's ceiling, and the
-   * time its approvals waited since.
+   * The last instruction its agent was given (docs/specs/executions.md, "The deadline"): its last turn's start, or a later
+   * message the agent took into a running turn (`_session/steering` answered `injected`); null before any.
    */
-  private ceiling(state: State, e: Execution, last: string, now: number): number {
-    return Date.parse(last) + this.limitsOf(e).ceilingSeconds * 1000 + waited(state, last, now)
+  private async lastPrompt(workstream: string, state: State, e: Execution): Promise<number | null> {
+    const prompted = promptsOf(state, e)
+    if (prompted === null) return null
+    let last = Date.parse(prompted.last)
+    for (const x of await this.store.entries(workstream))
+      if (x.execution === e.id && x.direction === 'in' && x.rpc_kind === 'response' && x.correlated_method === STEERING && object(x.content.result)?.outcome === 'injected')
+        last = Math.max(last, Date.parse(x.time))
+    return last
+  }
+
+  /** What ran in the sandbox as its first prompt left, as the bridge listed it then: recorded with that prompt's dispatch. */
+  private async baseline(workstream: string, e: Execution): Promise<{ pid: number; startedAt: string }[] | null> {
+    const first = (await this.store.entries(workstream)).find((x) => x.kind === 'acp.dispatching' && x.execution === e.id && Array.isArray(x.content.processes))
+    return first === undefined ? null : (first.content.processes as { pid: number; startedAt: string }[])
   }
 
   private report(fields: Record<string, unknown>): void {
@@ -884,10 +897,18 @@ export class Workstreams implements Handler {
       }
       if (entry.method !== 'initialize' && !latest.initialized) continue
       if (entry.method === 'session/prompt' && !latest.session) continue
+      let baseline: Record<string, unknown> = {}
       if (entry.method === 'session/prompt') {
+        // The first prompt: what runs before it is the harness's own (docs/specs/executions.md, "Work still running"). Until
+        // the bridge says, the prompt waits, and the next run tries again.
+        if (promptsOf(state, latest) === null && (await this.baseline(workstream, latest)) === null) {
+          const info = await this.executions.info(e.id).catch(() => null)
+          if (info === null) continue
+          baseline = { processes: info.processes.map((p) => ({ pid: p.pid, startedAt: p.startedAt })) }
+        }
         // This prompt is the last: the ceiling counts from it (docs/specs/executions.md, "The deadline").
         const { leaseSeconds, ceilingSeconds } = this.limitsOf(e)
-        const until = Math.min(Date.now() + leaseSeconds * 1000, Date.parse(entry.time) + ceilingSeconds * 1000)
+        const until = nextDeadline(Date.now(), leaseSeconds, Date.parse(entry.time), ceilingSeconds)
         if (until <= Date.now() || !latest.uid) {
           await this.fail(workstream, entry, 'deadline_refused')
           continue
@@ -904,7 +925,7 @@ export class Workstreams implements Handler {
           continue
         }
       }
-      const sent = await this.dispatch(workstream, entry, connection)
+      const sent = await this.dispatch(workstream, entry, connection, baseline)
       state = await this.store.state(workstream)
       if (sent && entry.method === 'session/cancel') await this.cancelPermissions(workstream, e.id, connection, String(object(entry.content.params)?.sessionId))
     }
@@ -1012,7 +1033,7 @@ export class Workstreams implements Handler {
       this.tokens.set(e.id, held)
     }
     const until = deadline ?? (Date.parse(this.executions.claimOf(e.id)?.spec?.lifecycle?.shutdownTime ?? '') || Date.now() + this.limitsOf(e).leaseSeconds * 1000)
-    if (held.profiles === profiles && (profiles === '' || held.until - until >= (this.tokenLife(e) / 2) * 1000)) return true
+    if (held.profiles === profiles && (profiles === '' || !tokenDue(held.until, until, this.tokenLife(e)))) return true
     return this.handToken(e)
   }
 
@@ -1104,7 +1125,7 @@ export class Workstreams implements Handler {
    * docs/specs/log.md, "Dispatch and recovery": the marker commits before the transport is called, and
    * nothing after it can refuse the write. A failed write is a local failure, not proof of no delivery.
    */
-  private async dispatch(workstream: string, entry: Entry, connection: string): Promise<boolean> {
+  private async dispatch(workstream: string, entry: Entry, connection: string, extra: Record<string, unknown> = {}): Promise<boolean> {
     await this.options.fault?.('before_marker', { position: entry.position, method: entry.method })
     // docs/specs/files.md, "References": the line goes with its files given back. One R2 does not give back
     // fails the request here, before its marker, so nothing after the marker can refuse the write.
@@ -1147,7 +1168,7 @@ export class Workstreams implements Handler {
         kind: 'acp.dispatching',
         execution: entry.execution,
         session: entry.session,
-        content: { requestPosition: entry.position, connection, startedAt: entry.time },
+        content: { requestPosition: entry.position, connection, startedAt: entry.time, ...extra },
       })
       return true
     })
@@ -1259,9 +1280,10 @@ export class Workstreams implements Handler {
         await this.agentLost(workstream, e, 'agent_failed')
       else {
         // One lease, never beyond the ceiling; then work left running renews it, or nothing does (docs/specs/executions.md, "The deadline").
-        const prompted = promptsOf(state, e)
+        const last = await this.lastPrompt(workstream, state, e)
         const now = Date.now()
-        const until = Math.min(now + this.limitsOf(e).leaseSeconds * 1000, prompted === null ? Infinity : this.ceiling(state, e, prompted.last, now))
+        const { leaseSeconds, ceilingSeconds } = this.limitsOf(e)
+        const until = last === null ? now + leaseSeconds * 1000 : nextDeadline(now, leaseSeconds, last, ceilingSeconds)
         try {
           if (until > now) {
             if (!(await this.ensureToken(e, until))) throw new Error('credentials_refused')
@@ -1404,14 +1426,16 @@ export class Workstreams implements Handler {
   }
 
   /**
-   * Whether work the agent started since `since`, its first prompt, still runs in the sandbox: a process under its adapter
-   * the bridge lists, started since (docs/specs/executions.md, "What still runs"). Null when the bridge does not say.
+   * Whether work the agent started still runs in the sandbox: a process under its adapter the bridge lists that it did not
+   * list as the first prompt left (docs/specs/executions.md, "Work still running"). Null when the bridge does not say. An
+   * execution whose first prompt left with no listing recorded: a process started since that prompt.
    */
-  private async running(e: Execution, since: string): Promise<boolean | null> {
+  private async running(workstream: string, e: Execution, first: string): Promise<boolean | null> {
     const info = await this.executions.info(e.id).catch(() => null)
     if (info === null) return null
-    const from = Date.parse(since)
-    return info.processes.some((p) => Date.parse(p.startedAt) >= from)
+    const baseline = await this.baseline(workstream, e)
+    if (baseline !== null) return working(info.processes, baseline)
+    return info.processes.some((p) => Date.parse(p.startedAt) >= Date.parse(first))
   }
 
   /**
@@ -1471,20 +1495,20 @@ export class Workstreams implements Handler {
     if (!e.uid || e.stopped || e.lost || e.failed || this.ending(e) || this.blocked.has(workstream)) return
     // Recovery is bounded by the deadline already granted: no renewal without the connection.
     if (!e.connection || this.executions.connectionOf(e.id) !== e.connection) return
-    const prompted = promptsOf(state, e)
-    if (prompted === null) return
-    const { leaseSeconds } = this.limitsOf(e)
+    const last = await this.lastPrompt(workstream, state, e)
+    if (last === null) return
+    const { leaseSeconds, ceilingSeconds } = this.limitsOf(e)
     const now = Date.now()
-    // The ceiling counts from the last prompt, but its approvals' waits.
-    const cap = this.ceiling(state, e, prompted.last, now)
-    const next = Math.min(now + leaseSeconds * 1000, cap)
+    // The ceiling: six hours after the last instruction, whatever waited meanwhile.
+    const cap = last + ceilingSeconds * 1000
+    const next = nextDeadline(now, leaseSeconds, last, ceilingSeconds)
     const current = Date.parse(this.executions.claimOf(e.id)?.spec?.lifecycle?.shutdownTime ?? '0')
     const step = Math.min(this.options.renewSeconds, leaseSeconds / 3) * 1000
     if (next <= now || !(next - current >= step || (next === cap && current < cap))) return
     const turn = state.active
     if (!turn || !turn.dispatching || !turn.startedAt) {
       // No turn: the bridge is asked what runs, at most once a step.
-      const running = await this.running(e, prompted.first)
+      const running = await this.running(workstream, e, promptsOf(state, e)!.first)
       if (running === null) return
       if (running) this.working.add(e.id)
       // Its work just ended: the lease starts now.

@@ -216,7 +216,7 @@ test('D7 the person writes while the approval waits: refused with the words; no 
   assert.equal(Number((await db.admin.query('SELECT count(*) FROM workstreams WHERE parent=$1', [ws])).rows[0].count), 0)
 })
 
-test('D8 no answer: expired at the approval’s end; progress meanwhile; the delegator’s turn deadline pushed back by the wait', async (t) => {
+test('D8 no answer: expired at the approval’s end; progress meanwhile; the delegator’s deadline never beyond the ceiling, the wait counted', async (t) => {
   const limits = { leaseSeconds: 60, ceilingSeconds: 30 }
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { approvalMs: 2_000, progressMs: 400 }, { workstreams: { renewSeconds: 1 }, open: { limits } })
   // Its turn runs while its call waits, as when its agent calls `delegate`.
@@ -233,10 +233,11 @@ test('D8 no answer: expired at the approval’s end; progress meanwhile; the del
   const [approval] = await projected(lab, ws, 'question', (q) => q.status !== 'pending')
   assert.equal(approval?.status, 'expired')
   await lab.turn(ws, 'done', 20_000)
-  // Its deadline, at most the last prompt + the ceiling, moved on by the approval's 2 s.
+  // The ceiling is absolute: the approval's 2 s push nothing back; the deadline reaches it, never beyond.
   const claim = (await lab.state(ws)).current!.claimName
   const beyond = lab.kube.deadlines.filter((d) => d.name === claim).map((d) => Date.parse(d.shutdownTime) - prompt - limits.ceilingSeconds * 1000)
-  assert.ok(beyond.some((ms) => ms >= 1_800 && ms < 3_000), `beyond the cap: ${beyond.join(', ')} ms`)
+  assert.ok(beyond.length > 0 && beyond.every((ms) => ms <= 0), `beyond the ceiling: ${beyond.join(', ')} ms`)
+  assert.equal(beyond.at(-1), 0, 'the end of the turn at the ceiling')
 })
 
 test('D9 another call needing approval while one waits: approval_pending', async (t) => {

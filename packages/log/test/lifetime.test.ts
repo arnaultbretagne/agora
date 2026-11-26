@@ -90,6 +90,39 @@ describe('a sandbox’s life', { concurrency: true }, () => {
     assert.equal(typeof end.content.anchor, 'string')
   })
 
+  it('E40 the Create’s own message starts a command at once: work, not the harness’s, and the deadline moves past the lease while it runs', { timeout: 150_000 }, async (t) => {
+    // The first prompt leaves as the Session opens: the command starts within milliseconds of it.
+    const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 }, prompt: [{ type: 'text', text: '/background 75 first.txt' }] })
+    await lab.turn(ws, 'done')
+    const answered = Date.parse(lines(await lab.entries(ws), 'in', 'session/prompt').at(-1)!.time)
+    // What ran as it left is recorded with its dispatch: the mock agent alone, nothing under it.
+    const dispatched = (await lab.entries(ws)).find((x) => x.kind === 'acp.dispatching' && Array.isArray(x.content.processes))!
+    assert.deepEqual(dispatched.content.processes, [])
+    await until('a lease past the end of the turn', () => Date.now() >= answered + 65_000, 70_000)
+    const claim = lab.kube.claims.get(e.claimName)
+    assert.ok(claim !== undefined && claim.metadata.deletionTimestamp === undefined, 'the claim lives on')
+    assert.ok(lab.kube.deadlines.filter((d) => d.name === e.claimName && d.at > answered + 60_000).length > 0, 'renewed past the lease')
+  })
+
+  it('E41 a message taken into a running turn is the last prompt: the ceiling counts from it', { timeout: 120_000 }, async (t) => {
+    const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
+    assert.ok((await lab.write(ws, '/sleep 45')).accepted)
+    const prompt = Date.parse(lines(await lab.entries(ws), 'out', 'session/prompt').at(-1)!.time)
+    await until('fifteen seconds in', () => Date.now() > prompt + 15_000, 20_000)
+    const current = (await lab.state(ws)).current!
+    assert.ok((await lab.command(ws, 'Write', { execution: current.id, session: current.session }, { prompt: [{ type: 'text', text: 'a fresh instruction' }], mayWait: true })).accepted)
+    const injected = await until('injected', async () => (await lab.entries(ws)).find((x) => x.direction === 'in' && x.correlated_method === '_session/steering' && (x.content.result as { outcome?: string } | undefined)?.outcome === 'injected'))
+    const turn = await lab.turn(ws, ['done', 'failed', 'cancelled', 'uncertain'], 60_000)
+    assert.equal(turn.status, 'done')
+    const said = lines(await lab.entries(ws), 'in', 'session/update').map((x) => String((x.content.params as { update?: { content?: { text?: string } } }).update?.content?.text ?? ''))
+    assert.ok(said.some((s) => s.startsWith('Heard: a fresh instruction')) && said.some((s) => s.includes('Slept 45 s.')), JSON.stringify(said.slice(-3)))
+    // Past the first prompt's ceiling, under the new one.
+    const patches = lab.kube.deadlines.filter((d) => d.name === e.claimName)
+    assert.ok(patches.some((d) => Date.parse(d.shutdownTime) > prompt + 30_000), 'moved past the first prompt’s ceiling')
+    assert.ok(patches.every((d) => Date.parse(d.shutdownTime) <= Date.parse(injected.time) + 30_000), 'never past the new one')
+    assert.equal(lab.kube.claims.get(e.claimName)?.metadata.deletionTimestamp, undefined)
+  })
+
   it('E14 nothing left running after the turn: the infrastructure destroys the sandbox one lease after it, and its anchor arrives', { timeout: 120_000 }, async (t) => {
     const { lab, ws, e } = await opened(t, { receiver: true, workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
     assert.ok((await lab.write(ws, 'a short turn')).accepted)
