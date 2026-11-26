@@ -29,6 +29,7 @@ import type { Notifications } from './notifications.ts'
 import type { FirstSessions } from './first-sessions.ts'
 import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
 import { isRole } from './marks.ts'
+import { causeOf } from './ends.ts'
 import { roleBlock, type Role } from './roles.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
@@ -769,8 +770,18 @@ export class Workstreams implements Handler {
   }
 
   private async end(workstream: string, e: Execution, reason: Reason): Promise<void> {
-    const anchor = (await this.store.entries(workstream)).findLast((x) => x.kind === 'anchor.received' && x.execution === e.id)
-    await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, anchor: anchor?.content.id ?? null } })
+    const entries = await this.store.entries(workstream)
+    const anchor = entries.findLast((x) => x.kind === 'anchor.received' && x.execution === e.id)
+    const cause = causeOf({
+      lost: entries.findLast((x) => x.kind === 'execution.lost' && x.execution === e.id)?.content ?? null,
+      stopped: e.stopped,
+      obtained: e.uid !== undefined,
+      running: await this.running(workstream, e),
+      prompted: e.prompted,
+      observed: this.executions.observed(e.id),
+      now: Date.now(),
+    })
+    await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, cause, anchor: anchor?.content.id ?? null } })
     this.executions.release(e.id)
     this.live.delete(workstream)
     this.tokens.delete(e.id)
@@ -784,8 +795,8 @@ export class Workstreams implements Handler {
    * docs/specs/executions.md, "The deadline": a dead agent ends its execution at once. Its deadline
    * moves to now, so the Pod ends and pushes its anchor without waiting out the lease.
    */
-  private async agentLost(workstream: string, e: Execution, reason: 'adapter_exited' | 'agent_failed'): Promise<void> {
-    await this.store.fact(workstream, { kind: 'execution.lost', execution: e.id, content: { reason } })
+  private async agentLost(workstream: string, e: Execution, reason: 'adapter_exited' | 'agent_failed', detail: Record<string, unknown> = {}): Promise<void> {
+    await this.store.fact(workstream, { kind: 'execution.lost', execution: e.id, content: { reason, ...detail } })
     this.executions.hold(e.id)
     if (!e.uid) return
     try {
@@ -1289,9 +1300,30 @@ export class Workstreams implements Handler {
         content: { connection, code, clean: drained && proven },
       })
       const e = state.executions.get(execution)
-      if (code === 1011 && e && !e.lost && !e.ended) await this.agentLost(workstream, e, 'adapter_exited')
+      if (code === 1011 && e && !e.lost && !e.ended) await this.agentLost(workstream, e, 'adapter_exited', await this.exitOf(execution))
       await this.project(workstream)
     })
+  }
+
+  /** How the adapter ended, as its bridge's `/info` says (docs/specs/executions.md, "The bridge's routes"); null when it cannot say. */
+  private async exitOf(execution: string): Promise<{ exitCode: number | null; signal: string | null }> {
+    const adapter = object((await this.executions.info(execution).catch(() => null))?.adapter)
+    return { exitCode: typeof adapter?.exitCode === 'number' ? adapter.exitCode : null, signal: typeof adapter?.signal === 'string' ? adapter.signal : null }
+  }
+
+  /** The execution's turn still running, with the bound on its deadline; null when none runs. */
+  private async running(workstream: string, e: Execution): Promise<{ bound: number } | null> {
+    const state = await this.store.state(workstream)
+    const turn = [...state.turns.values()].find((t) => t.execution === e.id && t.dispatching && !t.answered && t.status !== 'failed')
+    return turn?.startedAt ? { bound: this.bound(state, e, turn.startedAt) } : null
+  }
+
+  /**
+   * The bound on a sandbox's deadline during a turn, whatever the lease (docs/specs/executions.md, "The deadline"):
+   * the turn's start plus its maximum duration, its approvals' waits not counted.
+   */
+  private bound(state: State, e: Execution, startedAt: string): number {
+    return Date.parse(startedAt) + limitsOf(e).turnCapSeconds * 1000 + waited(state, startedAt, Date.now())
   }
 
   // ---------------------------------------------------------------- the anchor pushed by the Pod
@@ -1420,9 +1452,9 @@ export class Workstreams implements Handler {
     if (!turn || !turn.dispatching || !turn.startedAt || !e.uid || e.stopped || e.lost || e.failed || this.ending(e) || this.blocked.has(workstream)) return
     // Recovery is bounded by the deadline already granted: no renewal without the connection.
     if (!e.connection || this.executions.connectionOf(e.id) !== e.connection) return
-    const { leaseSeconds, turnCapSeconds } = limitsOf(e)
+    const { leaseSeconds } = limitsOf(e)
     // The turn's maximum counts its time but its approvals' waits (docs/specs/executions.md, "The deadline").
-    const cap = Date.parse(turn.startedAt) + turnCapSeconds * 1000 + waited(state, turn.startedAt, Date.now())
+    const cap = this.bound(state, e, turn.startedAt)
     const next = Math.min(Date.now() + leaseSeconds * 1000, cap)
     const current = Date.parse(this.executions.claimOf(e.id)?.spec?.lifecycle?.shutdownTime ?? '0')
     const step = Math.min(this.options.renewSeconds, leaseSeconds / 3) * 1000

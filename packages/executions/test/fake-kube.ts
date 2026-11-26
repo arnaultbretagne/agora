@@ -50,6 +50,8 @@ export class FakeKube implements KubeApi {
   anchorUrl = ''
   allocationDelayMs = 50
   failPatches = false
+  /** The creation of the claims it names refused, as an API server out of reach would: every one with `true`. */
+  failCreates: boolean | ((name: string) => boolean) = false
   /** Foreground deletion held: past its deadline a claim gets its deletionTimestamp, and stays with its Pod. */
   holdDeletion = false
   bridgeFactory: (publicKey: KeyObject, podName: string) => Promise<LabBridge> = mockBridge
@@ -88,6 +90,7 @@ export class FakeKube implements KubeApi {
   async createClaim(input: Json): Promise<Claim> {
     const claim = structuredClone(input) as unknown as Mutable
     const name = claim.metadata.name as string
+    if (this.failCreates === true || (typeof this.failCreates === 'function' && this.failCreates(name))) throw new KubeError(503, 'create refused (test)')
     if (this.claims.has(name)) throw new KubeError(409, `sandboxclaims "${name}" already exists`)
     this.created.push(name)
     claim.metadata.uid = randomUUID()
@@ -247,8 +250,36 @@ export class FakeKube implements KubeApi {
   /** A Pod recreated under the same name gets another UID than the one its old tokens carry. */
   readonly podUids = new Map<string, string>()
 
+  /** Pods that ended on their own: their status as the kubelet leaves it; null once the Pod is gone. */
+  readonly endedPods = new Map<string, Json | null>()
+
   async getPod(name = ''): Promise<Json | null> {
+    const ended = this.endedPods.get(name)
+    if (ended !== undefined) return ended === null ? null : structuredClone(ended)
     return { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Running' } }
+  }
+
+  /**
+   * The container killed by the kernel, as the kubelet reports it (`OOMKilled`, exit 137): its bridge dies on the
+   * spot, closing nothing cleanly, pushing no anchor; the Pod stays, `Failed`, until its claim's deadline.
+   */
+  async killPod(name: string, reason = 'OOMKilled', exitCode = 137, reportAfterMs = 0): Promise<void> {
+    // The kubelet reports the container's end when it sees it: Running until then.
+    const report = (): void => void this.endedPods.set(name, { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Failed', containerStatuses: [{ name: 'sandbox', state: { terminated: { reason, exitCode } } }] } })
+    if (reportAfterMs > 0) setTimeout(report, reportAfterMs)
+    else report()
+    const lab = this.bridges.get(name)
+    this.bridges.delete(name)
+    await lab?.bridge.close()
+  }
+
+  /** The Pod deleted by someone else than Agent Sandbox, before its claim's deadline: SIGTERM, then gone; its claim stays. */
+  async deletePod(name: string): Promise<void> {
+    const lab = this.bridges.get(name)
+    this.bridges.delete(name)
+    await lab?.bridge.terminate()
+    await lab?.bridge.close()
+    this.endedPods.set(name, null)
   }
 
   /** A projected token is `pod:<name>` here; anything else is refused, as TokenReview would. */

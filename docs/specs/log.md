@@ -32,10 +32,10 @@ projected from it.**
 | `execution.break` | A connection to the bridge closes, after every line received on it is committed. | The connection, the close code when known, clean or not. |
 | `session.opened` | `session/new`, `session/load` or `session/resume` is answered without error. | The ACP session id, the pool, the harness, the origin: new, or the anchor restored; and the exchanges its first prompt will give and those left out ("Continuing"). |
 | `session.ended` | The execution is lost, failed or ended, or another ACP session replaces this one. | The reason. |
-| `execution.lost` | The adapter died, the agent answered a prompt with an internal error (JSON-RPC `-32603`), the bridge instance changed, or the claim conflicts with the record. | The reason. |
+| `execution.lost` | The adapter died, the agent answered a prompt with an internal error (JSON-RPC `-32603`), the bridge instance changed, or the claim conflicts with the record. | The reason; for `adapter_exited`, `exitCode` and `signal` as the bridge's `GET /info` gives them, null when it cannot say. |
 | `execution.failed` | Startup or restoration cannot complete. | The reason and the request position when there is one. |
 | `anchor.received` | An authenticated anchor is stored. | Its id; never its bytes. |
-| `execution.ended` | The claim has disappeared. | The reason, and the anchor received if any. |
+| `execution.ended` | The claim has disappeared. | The reason, the `cause` — its `kind` and what goes with it (`executions.md`, "How an execution ended") —, and the anchor received if any. An entry of the earlier contract has no cause. |
 | `delegation.started` | A delegate's Workstream is created by `spawn_agent` (`delegation.md`), in that Workstream. | The delegator's Workstream and execution; the harness, model, effort and rights given; the approval's position in the delegator's Workstream, when one was asked. The delegate's role is its Create's (`roles.md`); an entry of the earlier contract names it itself, `agentType`. |
 | `delegation.continued`, `delegation.result`, `delegation.reported` | Not written any more; those in the log stay. | |
 | `question.expired` | An approval reaches its expiry unanswered, or the server starts while it waits (`delegation.md`, "Approval"). | The question's position. |
@@ -426,7 +426,7 @@ anchors, the dispatch of its prompts, the agent's title, its requests, and a del
 | `session.ended` | `session.ended` | `reason` |
 | `execution.break` | an unclean `execution.break` | `reason` `transport_error` |
 | `request.failed` | `request.failed` | `reason` |
-| `execution.lost`, `execution.failed`, `execution.ended` | the same entry | `reason` |
+| `execution.lost`, `execution.failed`, `execution.ended` | the same entry | `reason`; a loss `adapter_exited` its `exitCode` and `signal`; an end its `cause`, when it has one |
 
 Every notice also names its execution and Session.
 

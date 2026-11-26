@@ -10,6 +10,8 @@ export {
   MANAGED_BY,
   MANAGER,
   TERMINAL_CLAIM_REASONS,
+  POD_MARGIN_MS,
+  OOM_KILLED,
   claimName,
   sessionConfig,
   SESSION_CONFIG_ANNOTATION,
@@ -22,6 +24,8 @@ export {
   type PoolView,
   type CommandResult,
   type CredentialSource,
+  type Observed,
+  type PodEnd,
 } from './manager.ts'
 export { HttpKube, KubeError, type KubeApi, type Claim, type Json, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from './kube.ts'
 export { createApi, createAnchorReceiver } from './http.ts'
