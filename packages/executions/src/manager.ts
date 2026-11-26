@@ -446,7 +446,7 @@ export class ExecutionManager {
   }
 
   /**
-   * The Pod of a claim neither ending nor past its deadline, looked at while no connection is open: what made
+   * The Pod of a claim neither ending nor within the margin of its deadline, looked at while no connection is open: what made
    * it end before its time, if it did (docs/specs/executions.md, "How an execution ended"). Once its end is
    * known, it is not looked at again.
    */
