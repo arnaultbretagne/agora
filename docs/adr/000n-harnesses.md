@@ -103,7 +103,7 @@ flowchart LR
 | Placing files under a running adapter, for every harness | opencode opens its database when it starts: files placed later are never read (measured, 2026-10-02). |
 | A capture and a restore command declared by the image (opencode's `export` and `import`) | Works — an import into the live database is seen by the running adapter (same measurement) — but the bridge would run commands the image supplies, and each harness would capture its own way. |
 | Starting the adapter only at the claim | Every Session would pay the adapter's start, 2.6 s for opencode; a restart charges only restores. |
-| Each harness's own global instructions (`/etc/claude-code/CLAUDE.md`, `AGENTS.md` under opencode's `XDG_CONFIG_HOME`, `$CODEX_HOME/AGENTS.md`) | Three places and two names for one text, each declared by its image. |
+| Each harness's own global instructions (`/etc/claude-code/CLAUDE.md`, `AGENTS.md` in opencode's configuration directory, `$CODEX_HOME/AGENTS.md`) | Three places and two names for one text, each declared by its image. |
 | Letting the agent find its access on GitHub (`gh repo list`, `/user/repos`) | Both show what the gateway's PAT reaches, not the execution's grants — GraphQL cannot be granted per repository — and both stay closed. |
 | The token in `~/.agora/access.json` | Of no use to the agent, which goes out through the bridge; a JWT to decode where the claims are plain JSON. |
 
