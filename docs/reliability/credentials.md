@@ -54,6 +54,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R44 | 2026-11-27 | `9067fc5` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140637667476), all green — V6 skipped, no Docker there —, and the push's on the same commit (140637644707), all green: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). For C89, the judges' probes and 200 answers of random strings, seeded, written in the test; the rest as R42. No Google, no gateway: a stub answers each host. |
 | R45 | 2026-11-27 | `e0b61ac` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140646308244): every credentials test green, the job red for L146 of `packages/log/test/subagents.test.ts` alone ("kept as a generic element of its host", line 345), which this pull request does not touch and which passed in the `check` jobs on `c380b40`, `189f2ad` and `9067fc5` (R42–R44); ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R44. |
 | R46 | 2026-11-27 | `ae185d0` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140652246082): every credentials test green, L146 green again, the job red for L29 of `packages/log/test/recovery.test.ts` alone ("timed out: execution.ended" after 18.6 s), which this pull request does not touch and which passed in the `check` jobs on `189f2ad`, `9067fc5` and `e0b61ac` (R43–R45); ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R44. |
+| R47 | 2026-11-27 | `bc93751` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140656577927), all green — V6 skipped, no Docker there —, L146 and L29 of the log green again, before #253 made them reliable on `main`: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R44. |
 
 ## Cases
 
@@ -238,6 +239,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C89 | simulated: stub (the gateway answers) | unit | R45 | proven | As R44. |
 | C88 | — | unit | R46 | proven | As R44. |
 | C89 | simulated: stub (the gateway answers) | unit | R46 | proven | As R44. |
+| C88 | — | unit | R47 | proven | As R44. |
+| C89 | simulated: stub (the gateway answers) | unit | R47 | proven | As R44. |
 
 The partial verdicts are tracked in #107.
 
