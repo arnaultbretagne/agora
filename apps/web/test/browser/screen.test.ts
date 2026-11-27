@@ -1782,7 +1782,11 @@ test('U69 the queue\'s commands: each message a Write that may wait; the cross a
 
 test('U72 a message waiting, then Cancel: what it says, nothing goes; a next message: the first\'s turn, then its own', async () => {
   const page = await fresh()
-  await started(page, 'before the cancel')
+  // An agent that takes no message into its turn, as opencode: the next message's own turn comes once the first's has
+  // ended. One that does may take it into the first's, should that turn still run as it goes (log.md, "Into the turn").
+  const factory = c.kube.bridgeFactory
+  c.kube.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { noSteering: true })
+  await started(page, 'before the cancel').finally(() => (c.kube.bridgeFactory = factory))
   await send(page, '/tool-open 30')
   await cancelButton(page).waitFor()
   await thread(page).getByText('A long command').waitFor()
@@ -2483,11 +2487,20 @@ test('U81 Copy shown on hover over an earlier response: the thread under it does
   // Measured once the messages have slid in.
   await page.waitForFunction(() => document.querySelector('main')!.getAnimations({ subtree: true }).every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
   // And once the thread has stopped scrolling: the new turn brought to the top, the Workstream caught up.
-  await until('the thread at rest', async () => {
-    const at = (await next.boundingBox())!.y
-    await page.waitForTimeout(500)
-    return (await next.boundingBox())!.y === at
-  })
+  const atRest = () =>
+    until('the thread at rest', async () => {
+      const at = (await next.boundingBox())!.y
+      await page.waitForTimeout(500)
+      return (await next.boundingBox())!.y === at
+    })
+  await atRest()
+  // The first response where a reader hovers it: in view. The new turn brought to the top can leave it above the
+  // viewport, when the turn is still running as it shows; a hover there would scroll it into view first, and the
+  // thread with it.
+  await first.scrollIntoViewIfNeeded()
+  await atRest()
+  const shown = (await page.locator('main .overflow-y-auto').first().boundingBox())!
+  assert.ok((await first.boundingBox())!.y >= shown.y, 'the first response in view')
   assert.equal(await copy.count(), 0, 'no Copy before the hover')
   const before = (await next.boundingBox())!
   await first.hover()

@@ -606,7 +606,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U69 | `waiting` elements: two waiting, one sent, one retracted | Two queue items, in position order, with their text; removing one sends **Retract** with its position; `enqueue` and `steer` send **Write** with `mayWait`. |
 | U70 | In a browser, an agent taking messages into its turn, a turn running: a text typed, then sent with Ctrl+Enter or ⌘+Enter | **Cancel** alone, then **Send** beside it once typed; the message in the thread above the rest of the response; nothing left waiting; **Cancel** still offered until the turn ends. |
 | U71 | In a browser, an agent that does not, a turn running: two messages sent, the first retracted | Both above the composer, oldest first; the cross takes the first away, never sent; at the turn's end the second's turn. |
-| U72 | In a browser, a message waiting, then **Cancel** | "These go with your next message."; nothing goes; a next message sent: the first's turn, then its own. |
+| U72 | In a browser, an agent that takes no message into its turn, as opencode: a message waiting, then **Cancel** | "These go with your next message."; nothing goes; a next message sent: the first's turn, then its own. |
 | U73 | In a browser, a Write refused during a turn; a first message whose Create is refused | Its reason above the composer; the text back in the composer; likewise. |
 | U74 | In a browser, a turn running: `/` typed, Escape; then Escape again | The commands hidden, the turn going on; then the turn cancelled. |
 | U75 | In a browser, a message with an attachment sent during a turn, then taken back | One line above the composer, its attachment counted; no message of it in the thread; taken back, gone, and never sent. |
