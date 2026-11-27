@@ -353,7 +353,7 @@ test('V10 the fixed offer: GET /api/config offers what each entry of the access 
   }
 })
 
-test('V12 the fixed limits: GET /api/limits answers three invented subscriptions, their resets counted from the request; the header\'s gauge shows them', async (t) => {
+test('V12 the fixed limits: GET /api/limits answers four invented subscriptions, their resets counted from the request; the header\'s gauge shows them', async (t) => {
   const url = await target(t)
   const asked = Date.now()
   const response = await fetch(`${url}/api/limits`, { headers: BROWSER_GATE })
@@ -368,9 +368,10 @@ test('V12 the fixed limits: GET /api/limits answers three invented subscriptions
     const ms = Date.parse(at) - offset
     assert.ok(ms >= asked - 1000 && ms <= answered + 1000, `${at}: ${String(offset)} ms from the request`)
   }
-  assert.deepEqual(Object.keys(limits), ['anthropic', 'chatgpt', 'zai'])
+  assert.deepEqual(Object.keys(limits), ['anthropic', 'antigravity', 'chatgpt', 'zai'])
   const expected = {
     anthropic: { plan: null, stale: false, error: null, checked: 0, windows: [['five_hour', 42, 2 * HOUR + 10 * MINUTE], ['weekly', 68, 3 * DAY + 4 * HOUR]] },
+    antigravity: { plan: null, stale: false, error: null, checked: 0, windows: [['five_hour', 20, 3 * HOUR + 5 * MINUTE], ['weekly', 35, 6 * DAY + 2 * HOUR]] },
     chatgpt: { plan: 'pro', stale: false, error: null, checked: 0, windows: [['five_hour', 12, 4 * HOUR + 25 * MINUTE], ['weekly', 88, DAY + 6 * HOUR]] },
     zai: { plan: 'lite', stale: true, error: 'api.z.ai answered 503', checked: -40 * MINUTE, windows: [['five_hour', 30, HOUR + 45 * MINUTE], ['weekly', 55, 5 * DAY]] },
   } as const
@@ -388,10 +389,11 @@ test('V12 the fixed limits: GET /api/limits answers three invented subscriptions
     const popover = page.locator('[data-slot=limits-popover]')
     await popover.getByRole('region', { name: 'z.ai' }).waitFor()
     const sections = await popover.locator('section').evaluateAll((s) => s.map((e) => [e.getAttribute('aria-label'), (e as HTMLElement).innerText.trim()]))
-    assert.deepEqual(sections.map(([name]) => name), ['Claude', 'ChatGPT', 'z.ai'])
+    assert.deepEqual(sections.map(([name]) => name), ['Claude', 'Gemini', 'ChatGPT', 'z.ai'])
     assert.match(sections[0]![1]!, /^Claude\s+5-hour\s+42% · resets in 2h 10m\s+Weekly\s+68% · resets in 3d 4h$/)
-    assert.match(sections[1]![1]!, /^ChatGPT\s+pro\s+5-hour\s+12% · resets in 4h 25m\s+Weekly\s+88% · resets in 1d 6h$/i)
-    assert.match(sections[2]![1]!, /^z\.ai\s+lite\s+5-hour\s+30% · resets in 1h 45m\s+Weekly\s+55% · resets in 5d\s+Not updated since \d{1,2}:\d{2}/i)
+    assert.match(sections[1]![1]!, /^Gemini\s+5-hour\s+20% · resets in 3h 5m\s+Weekly\s+35% · resets in 6d 2h$/)
+    assert.match(sections[2]![1]!, /^ChatGPT\s+pro\s+5-hour\s+12% · resets in 4h 25m\s+Weekly\s+88% · resets in 1d 6h$/i)
+    assert.match(sections[3]![1]!, /^z\.ai\s+lite\s+5-hour\s+30% · resets in 1h 45m\s+Weekly\s+55% · resets in 5d\s+Not updated since \d{1,2}:\d{2}/i)
   } finally {
     await page.context().close()
   }
