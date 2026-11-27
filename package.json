@@ -15,7 +15,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && node --test scripts/*.test.ts",
     "check:case-ids": "node scripts/case-ids.ts",
-    "check": "npm run check:case-ids && npm run typecheck && npm test && npm run test:browser -w @agora/web"
+    "check": "npm run check:case-ids && npm run typecheck && NODE_OPTIONS=\"--test-reporter=spec --test-reporter-destination=stdout --test-reporter=$INIT_CWD/scripts/annotate-failures.mjs --test-reporter-destination=stdout\" npm test && NODE_OPTIONS=\"--test-reporter=spec --test-reporter-destination=stdout --test-reporter=$INIT_CWD/scripts/annotate-failures.mjs --test-reporter-destination=stdout\" npm run test:browser -w @agora/web"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

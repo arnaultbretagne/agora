@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import type { AccountLimits, SubscriptionLimits } from '@agora/credentials'
 import { startBridge, pushBundle, type Bridge } from '@agora/harness-bridge'
 import { sessionsDir } from '@agora/mock-agent/storage'
 import { HARNESS_LABEL, KubeError, SESSION_CONFIG_ANNOTATION, type Claim, type CredentialSource, type Json, type KubeApi, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from '@agora/executions'
@@ -326,5 +327,55 @@ export function previewOffer(): CredentialSource {
     offered: PREVIEW_OFFERED,
     describe: () => ({ proxy: null, profiles: [], base: [], offered: [...PREVIEW_OFFERED] }),
     mint: () => Promise.reject(new Error('preview_signs_nothing')),
+  }
+}
+
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+
+/**
+ * What a preview's `GET /api/limits` answers (docs/specs/preview.md, "The limits"): three invented subscriptions, read
+ * now — Claude, no plan; ChatGPT, `pro`, its week nearly spent; z.ai, `lite`, its last read failed 40 minutes after
+ * the one its windows stand from. Each window starts again as long after the request as the last time it was asked.
+ */
+export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLimits, 'read'> {
+  return {
+    read: async (): Promise<Record<string, AccountLimits>> => {
+      const t = now()
+      const at = (ms: number) => new Date(t + ms).toISOString()
+      return {
+        anthropic: {
+          windows: [
+            { kind: 'five_hour', usedPercent: 42, resetsAt: at(2 * HOUR + 10 * MINUTE) },
+            { kind: 'weekly', usedPercent: 68, resetsAt: at(3 * DAY + 4 * HOUR) },
+          ],
+          plan: null,
+          checkedAt: at(0),
+          stale: false,
+          error: null,
+        },
+        chatgpt: {
+          windows: [
+            { kind: 'five_hour', usedPercent: 12, resetsAt: at(4 * HOUR + 25 * MINUTE) },
+            { kind: 'weekly', usedPercent: 88, resetsAt: at(1 * DAY + 6 * HOUR) },
+          ],
+          plan: 'pro',
+          checkedAt: at(0),
+          stale: false,
+          error: null,
+        },
+        zai: {
+          windows: [
+            { kind: 'five_hour', usedPercent: 30, resetsAt: at(1 * HOUR + 45 * MINUTE) },
+            { kind: 'weekly', usedPercent: 55, resetsAt: at(5 * DAY) },
+          ],
+          plan: 'lite',
+          checkedAt: at(-40 * MINUTE),
+          stale: true,
+          error: 'api.z.ai answered 503',
+        },
+      }
+    },
   }
 }

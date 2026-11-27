@@ -71,6 +71,14 @@ and it reaches nothing but its database.**
 | What it gives | Nothing. The offer is said by the configuration alone: no key signs a token for it, no execution is handed a credential, and an execution created or scoped with any of them reaches no more than one with none. A Create's and a Scope's profiles are checked as without a gateway (`credentials.md`): recorded, never granted. |
 | Production | Unchanged: without `PREVIEW=true`, `GET /api/config` says what the gateway's signer offers, `OFFERED_PROFILES`, as before; with it, `GATEWAY_PROXY` and `OFFERED_PROFILES` still stop the server ("The configuration"). |
 
+## The limits
+
+| Element | Rule |
+| --- | --- |
+| What `GET /api/limits` answers | Three invented subscriptions (`credentials.md`, "Limits"), whatever the pools: `anthropic`, no plan, its 5-hour window 42 % used and starting again in 2 h 10 min, its week 68 % in 3 days 4 h, read at the request; `chatgpt`, plan `pro`, 12 % in 4 h 25 min and 88 % in 1 day 6 h, read at the request; `zai`, plan `lite`, 30 % in 1 h 45 min and 55 % in 5 days, `stale`, read 40 minutes before the request, `error` `api.z.ai answered 503`. Each reset counted from the request. |
+| What it reads | Nothing: no provider, no gateway. |
+| Production | Unchanged: without `PREVIEW=true`, the limits are read through the gateway as `credentials.md` says, and none without it. |
+
 ## Acceptance cases
 
 | Case | Scenario | Expected |
@@ -86,6 +94,7 @@ and it reaches nothing but its database.**
 | V9 | Behind the browser gate's headers, in a browser: the two forms' conversations opened; then a draft, the Mock agent picked, `/question` sent, an option chosen, Answer | Each row "waiting for you"; the first, its select box pending, the question and its options; the second, its Question Flow pending, "1 of 2". Then the box; answered, the agent given the option, the box a receipt. |
 | V10 | Behind the browser gate's headers: `GET /api/config`; then in a browser, a draft, the Mock agent picked, the access picker opened, GitHub ticked | `proxy` null, `offered` the seven profiles of "The offer", no base profile; the key on the composer, its menu listing Internet, GitHub — `example/app, example/docs, example/site (read)` under it —, vault, k8s, agora, one line each, no harness's or model's service; the key then named "Internet, GitHub". |
 | V11 | The fixtures without `antigravity.json`; then with one; then without `opencode.json` | Fifteen conversations, fourteen of them listed, none of `antigravity`; then sixteen, `antigravity` a Workstream of its own with the fixture's entries; then the conversations refused, the missing fixture named. |
+| V12 | Behind the browser gate's headers: `GET /api/limits`; then in a browser, the client, the gauge in the header clicked | `anthropic`, `chatgpt` and `zai` as "The limits" says, their resets counted from the request; the gauge, opened: Claude, ChatGPT `pro` and z.ai `lite`, each with "5-hour" and "Weekly", z.ai's "Not updated since". |
 
 ## To be specified
 

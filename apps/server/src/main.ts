@@ -8,7 +8,7 @@ import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKey
 import { Delegations, Files, FirstSessions, Identity, LogStore, Merges, Notifications, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, ownersOf, refuseUnproven, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
-import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys, previewOffer } from './preview.ts'
+import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys, previewLimits, previewOffer } from './preview.ts'
 import { writeSeeds } from './seeds.ts'
 
 function number(name: string, fallback: number): number {
@@ -73,17 +73,20 @@ const credentials =
         offered: offeredProfiles(process.env.OFFERED_PROFILES),
       })
 // docs/specs/credentials.md, "Limits": the accounts' limits, read through the gateway from the server's
-// own address (POD_IP), checked against the gateway's root (GATEWAY_CA_FILE). Without them, none.
+// own address (POD_IP), checked against the gateway's root (GATEWAY_CA_FILE). Without them, none; a preview's
+// are fixed (docs/specs/preview.md, "The limits").
 const podAddress = process.env.POD_IP ?? ''
 const limits =
-  credentials === undefined || podAddress === ''
-    ? undefined
-    : new SubscriptionLimits({
-        signer: credentials,
-        address: podAddress,
-        profiles: async () => (await executions.pools()).flatMap((pool) => pool.baseProfiles),
-        ...(process.env.GATEWAY_CA_FILE ? { ca: readFileSync(process.env.GATEWAY_CA_FILE, 'utf8') } : {}),
-      })
+  preview !== null
+    ? previewLimits()
+    : credentials === undefined || podAddress === ''
+      ? undefined
+      : new SubscriptionLimits({
+          signer: credentials,
+          address: podAddress,
+          profiles: async () => (await executions.pools()).flatMap((pool) => pool.baseProfiles),
+          ...(process.env.GATEWAY_CA_FILE ? { ca: readFileSync(process.env.GATEWAY_CA_FILE, 'utf8') } : {}),
+        })
 // docs/specs/files.md, "The server": the files' bucket; without it, the server does not start.
 const store =
   preview === null

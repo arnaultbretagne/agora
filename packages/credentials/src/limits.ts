@@ -258,8 +258,8 @@ export class SubscriptionLimits {
   }
 }
 
-/** `GET /api/limits`: the accounts' limits, by base profile; none when the server cannot read them. */
-export async function limitsHttp(limits: SubscriptionLimits | undefined, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+/** `GET /api/limits`: the accounts' limits, by base profile, as `limits` reads them (a preview's are fixed); none when the server cannot read them. */
+export async function limitsHttp(limits: Pick<SubscriptionLimits, 'read'> | undefined, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   if (new URL(req.url ?? '/', 'http://agora').pathname !== '/api/limits') return false
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })

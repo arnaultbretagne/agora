@@ -735,86 +735,185 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 /**
- * The account's limits as the server would read them through the gateway, which the tests never
- * reach: the mock's pool draws from Claude's account, 5-hour window 72 % used, the week 19 %.
+ * The accounts' limits as the server would read them through the gateway, which the tests never reach: Claude's
+ * 5-hour window 72 % used, its week 19 %; ChatGPT's, `pro`, 8 % and 40 %; z.ai's last read failed, its windows
+ * kept from the read before; an account with neither windows nor a reason. The mock's pool draws from none of
+ * them. Each window starts again as long after each read as said here; z.ai's windows stand from a read 40 minutes
+ * before the first. `answer` changes what the next reads give, `initial` the first answer; `reads` counts them.
  */
-async function limitsOf(page: Page): Promise<void> {
-  await page.route('**/api/pools', async (route) => {
-    const response = await route.fetch()
-    const body = (await response.json()) as { pools: { name: string; baseProfiles?: string[] }[] }
-    for (const pool of body.pools) if (pool.name === 'mock-test') pool.baseProfiles = ['anthropic']
-    await route.fulfill({ response, json: body })
-  })
-  const now = Date.now()
-  const at = (ms: number) => new Date(now + ms).toISOString()
-  await page.route('**/api/limits', (route) =>
-    route.fulfill({
-      json: {
-        limits: {
-          anthropic: {
-            windows: [
-              { kind: 'five_hour', usedPercent: 72, resetsAt: at(2 * 3_600_000 + 10 * 60_000 - 1000) },
-              { kind: 'weekly', usedPercent: 19, resetsAt: at(3 * 86_400_000 + 4 * 3_600_000 - 1000) },
-            ],
-            plan: 'max',
-            checkedAt: at(0),
-            stale: false,
-            error: null,
-          },
-        },
+async function limitsOf(page: Page) {
+  const checkedAt = new Date(Date.now() - 40 * 60_000).toISOString()
+  const initial = (): Record<string, unknown> => {
+    const now = Date.now()
+    const at = (ms: number) => new Date(now + ms).toISOString()
+    return {
+      anthropic: {
+        windows: [
+          { kind: 'five_hour', usedPercent: 72, resetsAt: at(2 * 3_600_000 + 10 * 60_000 - 1000) },
+          { kind: 'weekly', usedPercent: 19, resetsAt: at(3 * 86_400_000 + 4 * 3_600_000 - 1000) },
+        ],
+        plan: null,
+        checkedAt: at(0),
+        stale: false,
+        error: null,
       },
-    }),
-  )
+      chatgpt: {
+        windows: [
+          { kind: 'five_hour', usedPercent: 8, resetsAt: at(45 * 60_000 - 1000) },
+          { kind: 'weekly', usedPercent: 40, resetsAt: at(86_400_000 - 1000) },
+        ],
+        plan: 'pro',
+        checkedAt: at(0),
+        stale: false,
+        error: null,
+      },
+      nobody: { windows: [], plan: null, checkedAt: null, stale: true, error: null },
+      zai: {
+        windows: [
+          { kind: 'five_hour', usedPercent: 30, resetsAt: at(3_600_000 - 1000) },
+          { kind: 'weekly', usedPercent: 55, resetsAt: at(5 * 86_400_000 - 1000) },
+        ],
+        plan: 'lite',
+        checkedAt,
+        stale: true,
+        error: 'api.z.ai answered 503',
+      },
+    }
+  }
+  let limits = initial
+  let reads = 0
+  await page.route('**/api/limits', (route) => {
+    reads++
+    return route.fulfill({ json: { limits: limits() } })
+  })
+  return { reads: () => reads, answer: (next: Record<string, unknown> | (() => Record<string, unknown>)) => void (limits = typeof next === 'function' ? next : () => next), initial, checkedAt }
 }
 
-test('U43 the context and the limits: a gauge for the limits alone; once the agent has said, its ring; opened, the context, then the account\'s windows', async () => {
+/** The header's gauge. */
+const gaugeOf = (page: Page) => page.locator('header').getByRole('button', { name: 'Limits' })
+/** The header's last element, how far it ends from the header's right edge, its icon's classes. */
+const corner = (page: Page) =>
+  page.locator('header').evaluate((header) => {
+    const last = header.lastElementChild!
+    return { last: last.getAttribute('aria-label'), gap: header.getBoundingClientRect().right - last.getBoundingClientRect().right, icon: last.querySelector('svg')?.getAttribute('class') ?? '' }
+  })
+/** A popover's sections: each one's name, its text, its bars, and the opacity of each window. */
+const sectionsOf = (popover: Locator) =>
+  popover.locator('section').evaluateAll((sections) =>
+    sections.map((s) => ({
+      name: s.getAttribute('aria-label'),
+      text: (s as HTMLElement).innerText.trim(),
+      bars: s.querySelectorAll('[data-slot=meter]').length,
+      opacity: [...s.querySelectorAll('[data-slot=meter]')].map((m) => getComputedStyle(m.parentElement!).opacity),
+    })),
+  )
+
+test('U43 the context and the limits: every subscription behind the header\'s gauge, whatever the pool; the composer\'s ring the context alone', async () => {
   const page = await fresh()
-  await limitsOf(page)
+  const limits = await limitsOf(page)
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
-  const gauge = page.getByRole('button', { name: 'Limits' })
+  const gauge = gaugeOf(page)
+  await gauge.waitFor()
+  assert.equal(limits.reads(), 1, 'read once the page opens')
+  const draft = await corner(page)
+  assert.equal(draft.last, 'Limits', 'the gauge in the header\'s top-right corner')
+  assert.ok(draft.gap <= 16, `at the header's right edge: ${String(draft.gap)} px from it`)
+  assert.match(draft.icon, /lucide-gauge/)
+  assert.match(draft.icon, /text-amber-600/, 'amber: Claude\'s 5-hour window is 72 % used')
+  assert.equal(await page.locator('main form [data-slot=context-display-trigger]').count(), 0, 'a draft has no context: nothing beside Send')
+  assert.equal(await page.locator('main form').getByRole('button', { name: 'Limits' }).count(), 0, 'no gauge in the composer')
   await gauge.click()
-  const popover = page.locator('[data-slot=context-display-popover]')
-  await popover.getByText('Subscription').waitFor()
-  assert.equal(await popover.getByText('of the context').count(), 0, 'a draft has no context')
-  const draft = await popover.getByRole('region', { name: 'Subscription' }).innerText()
-  assert.match(draft, /Subscription\s+max/i)
-  assert.match(draft, /5-hour\s+72% · resets in 2h 10m/)
-  assert.match(draft, /Weekly\s+19% · resets in 3d 4h/)
+  const popover = page.locator('[data-slot=limits-popover]')
+  await popover.getByRole('region', { name: 'Claude' }).waitFor()
+  // The sections stand from the first read while the second is on its way: counted once it has been asked.
+  await until('read again as it opens', () => limits.reads() >= 2)
+  assert.equal(limits.reads(), 2, 'read once more, not twice')
+  const sections = await sectionsOf(popover)
+  assert.deepEqual(sections.map((s) => s.name), ['Claude', 'ChatGPT', 'z.ai'], 'each account with windows or a reason, in order; the one with neither left out')
+  assert.match(sections[0]!.text, /^Claude\s+5-hour\s+72% · resets in 2h 10m\s+Weekly\s+19% · resets in 3d 4h$/, 'no plan for Claude')
+  assert.match(sections[1]!.text, /^ChatGPT\s+pro\s+5-hour\s+8% · resets in 45m\s+Weekly\s+40% · resets in 1d$/i)
+  const since = await page.evaluate((at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), limits.checkedAt)
+  assert.match(since, /^\d{1,2}:\d{2}/)
+  assert.match(sections[2]!.text, /^z\.ai\s+lite\s+5-hour\s+30% · resets in 1h\s+Weekly\s+55% · resets in 5d\s+/i)
+  assert.ok(sections[2]!.text.endsWith(`Not updated since ${since}.`), sections[2]!.text)
+  assert.deepEqual(sections.map((s) => s.bars), [2, 2, 2], 'a bar for each window')
+  assert.deepEqual(sections.map((s) => s.opacity), [['1', '1'], ['1', '1'], ['0.6', '0.6']], 'z.ai\'s windows dimmed, the others not')
+  assert.equal(await popover.getByText('of the context').count(), 0, 'no context in the header')
   await shot(page, 'u43-draft')
   await page.keyboard.press('Escape')
+  // Read again at the next opening: ChatGPT's account alone, never read, with its reason.
+  limits.answer({ chatgpt: { windows: [], plan: null, checkedAt: null, stale: true, error: 'the gateway refused the tunnel: 403' } })
+  await gauge.click()
+  await popover.getByText("The limits couldn't be read.").waitFor()
+  assert.equal(limits.reads(), 3)
+  const unread = await sectionsOf(popover)
+  assert.deepEqual(unread.map((s) => [s.name, s.bars]), [['ChatGPT', 0]])
+  assert.match(unread[0]!.text, /^ChatGPT\s+The limits couldn't be read\.$/)
+  assert.doesNotMatch((await corner(page)).icon, /text-amber|text-destructive/, 'no window: the gauge in the text\'s colour')
+  await page.keyboard.press('Escape')
+  // Above 85 %: the destructive colour.
+  limits.answer({ anthropic: { windows: [{ kind: 'weekly', usedPercent: 91, resetsAt: null }], plan: null, checkedAt: null, stale: false, error: null } })
+  await gauge.click()
+  await popover.getByText('91%').waitFor()
+  assert.match((await corner(page)).icon, /text-destructive/)
+  await page.keyboard.press('Escape')
+  limits.answer(limits.initial)
+  // A Workstream of the same pool: the same gauge in the corner; the ring the context alone.
   await send(page, 'measure the context')
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
   await thread(page).getByText('Echo #1: measure the context.').waitFor()
   await gauge.waitFor()
+  assert.equal(await page.locator('main form [data-slot=context-display-trigger]').count(), 0, 'no context said yet: nothing beside Send')
   await send(page, '/usage 150000/200000')
   await thread(page).getByText('Context: 150000 of 200000.').waitFor()
-  const ring = page.getByRole('button', { name: 'Context usage' })
+  const ring = page.locator('main form').getByRole('button', { name: 'Context usage' })
   await ring.getByText('75%').waitFor()
-  assert.equal(await gauge.count(), 0, 'the ring stands for both')
+  assert.equal((await corner(page)).last, 'Limits', 'the gauge still in the corner')
   await ring.click()
-  await popover.getByText('75% of the context').waitFor()
-  await popover.getByText('150k / 200k').waitFor()
-  const windows = await popover.getByRole('region', { name: 'Subscription' }).innerText()
-  assert.match(windows, /Subscription\s+max/i)
-  assert.match(windows, /5-hour\s+72% · resets in 2h 10m/)
-  assert.match(windows, /Weekly\s+19% · resets in 3d 4h/)
+  const context = page.locator('[data-slot=context-display-popover]')
+  await context.getByText('75% of the context').waitFor()
+  await context.getByText('150k / 200k').waitFor()
+  assert.deepEqual(await context.locator('section').evaluateAll((s) => s.map((e) => e.getAttribute('aria-label'))), ['Context'], 'the context alone: no Subscription')
+  assert.equal(await context.locator('[data-slot=meter]').count(), 1, 'its bar')
+  assert.equal(await context.getByText(/Subscription|5-hour|Weekly/).count(), 0)
   await shot(page, 'u43-desktop')
   await page.keyboard.press('Escape')
   await toggle(page, 'dark')
-  await ring.click()
-  await popover.getByText('75% of the context').waitFor()
+  await gauge.click()
+  await popover.getByRole('region', { name: 'z.ai' }).waitFor()
   await shot(page, 'u43-dark')
   await page.keyboard.press('Escape')
-  // On a phone: the ring beside Send, nothing cut, opened by a touch.
+  // No account with windows nor a reason: no gauge.
+  limits.answer({ nobody: { windows: [], plan: null, checkedAt: null, stale: true, error: null } })
+  const read = page.waitForResponse('**/api/limits')
+  await page.reload()
+  await read
+  await ring.getByText('75%').waitFor()
+  assert.equal(await gaugeOf(page).count(), 0, 'nothing to show: no gauge')
+  // On a phone: the gauge in the header beside the whole title; opened by a touch, within the screen.
   const { page: small } = await phone()
   await limitsOf(small)
   await small.goto(page.url())
-  const touched = small.getByRole('button', { name: 'Context usage' })
-  await touched.getByText('75%').waitFor()
+  await small.getByRole('button', { name: 'Context usage' }).getByText('75%').waitFor()
+  const touched = gaugeOf(small)
+  await touched.waitFor()
+  const header = await small.locator('header').evaluate((h) => {
+    const title = [...h.querySelectorAll('span.font-medium')].find((e) => e.textContent === 'measure the context') as HTMLElement | undefined
+    const gauge = h.querySelector('[aria-label=Limits]')!.getBoundingClientRect()
+    return { title: title === undefined ? null : { cut: title.scrollWidth > title.clientWidth, right: title.getBoundingClientRect().right }, gauge: { left: gauge.left, right: gauge.right }, width: window.innerWidth }
+  })
+  assert.ok(header.title !== null, 'the title in the header')
+  assert.equal(header.title.cut, false, 'the title whole')
+  assert.ok(header.title.right <= header.gauge.left, 'the title before the gauge')
+  assert.ok(header.gauge.right <= header.width, 'the gauge within the screen')
   assert.deepEqual(await cut(small, 'main form button'), [])
   await touched.tap()
-  await small.locator('[data-slot=context-display-popover]').getByText('75% of the context').waitFor()
+  const shown = small.locator('[data-slot=limits-popover]')
+  await shown.getByRole('region', { name: 'z.ai' }).waitFor()
+  const box = (await shown.boundingBox())!
+  const screen = small.viewportSize()!
+  assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= screen.width && box.y + box.height <= screen.height, `the popover within the screen: ${JSON.stringify(box)}`)
   await shot(small, 'u43-phone')
 })
 
@@ -2383,6 +2482,12 @@ test('U81 Copy shown on hover over an earlier response: the thread under it does
   await page.mouse.move(5, 5)
   // Measured once the messages have slid in.
   await page.waitForFunction(() => document.querySelector('main')!.getAnimations({ subtree: true }).every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
+  // And once the thread has stopped scrolling: the new turn brought to the top, the Workstream caught up.
+  await until('the thread at rest', async () => {
+    const at = (await next.boundingBox())!.y
+    await page.waitForTimeout(500)
+    return (await next.boundingBox())!.y === at
+  })
   assert.equal(await copy.count(), 0, 'no Copy before the hover')
   const before = (await next.boundingBox())!
   await first.hover()

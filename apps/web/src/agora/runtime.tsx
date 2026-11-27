@@ -23,11 +23,11 @@ import {
   formOf,
   messagesOf,
   poolOffered,
-  poolLimits,
   poolSettings,
   returnedOf,
   startBody,
   startingOf,
+  subscriptions,
   waitingOf,
   withAccess,
   withRole,
@@ -40,6 +40,7 @@ import {
   type Picks,
   type Role,
   type Setting,
+  type Subscription,
   type ListRow,
   type Waiting,
   type WorkstreamView,
@@ -94,8 +95,8 @@ export interface Agora {
   readonly refusal: string | null
   /** What the agent accepts beyond text: the open or last execution's, or, when sending starts one, its pool's. */
   readonly promptCapabilities: PromptCapabilities | null
-  /** The limits of the account the pool shown draws from; null before they are read or when it has none. */
-  readonly limits: AccountLimits | null
+  /** Every subscription with windows or a reason, whatever the pool shown; none before they are read. */
+  readonly limits: readonly Subscription[]
   /** Reads the limits again; the server answers from what it read in the last minutes. */
   refreshLimits(): void
   choosePool(pool: string): void
@@ -270,7 +271,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     void api.limits().then(setAccounts, () => setAccounts((a) => a ?? {}))
   }, [api])
   useEffect(refreshLimits, [refreshLimits])
-  const limits = useMemo(() => poolLimits(pools?.find((p) => p.name === pool)?.baseProfiles, accounts), [pools, pool, accounts])
+  const limits = useMemo(() => subscriptions(accounts), [accounts])
   // Picked for the execution a message will start: an open Session shows its own.
   const chosen = useMemo(() => (composer.create && begin.settings !== null && begin.settings.pool === pool ? begin.settings.values : NOTHING), [composer.create, begin.settings, pool])
   const settings = useMemo(
