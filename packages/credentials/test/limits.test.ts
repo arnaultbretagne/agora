@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { compileProfile, getThroughGateway, GrantSigner, LIMIT_ENDPOINTS, LIMITS_NOT_READ, LIMITS_WITHOUT_POOL, limitsHttp, ProfileRefused, SubscriptionLimits, type GatewayGet } from '../src/index.ts'
+import { DIAGNOSTIC_FIELDS, DIAGNOSTIC_WORDS } from '../src/limits.ts'
 
 /** Answers as each provider did on 2026-10-07 (identifiers left out). */
 const ANSWERS: Record<string, unknown> = {
@@ -184,6 +185,7 @@ describe('each provider', () => {
       { groups: [GOOGLE_SUMMARY.groups[1], GOOGLE_SUMMARY.groups[2]] },
       gemini([{ bucketId: 'gemini-argon-wtu-weekly', window: 'weekly', remainingFraction: 0.5 }, { bucketId: 'gemini-daily', window: 'daily', remainingFraction: 0.5 }, { bucketId: 'gemini-session-history', remainingFraction: 0.5 }]),
       gemini([{ bucketId: 'gemini-weekly', remainingAmount: 40 }, { bucketId: 'gemini-5h', remaining: { case: 'remainingAmount', value: 0.5 } }]),
+      gemini([{ bucketId: 'gemini-weekly', remainingFraction: 1.5 }, { bucketId: 'gemini-5h', remainingFraction: -0.5 }]),
       { groups: [{ displayName: 'All Models', buckets: [{ bucketId: 'gemini-pro', remainingFraction: 1 }] }] },
     ]) assert.deepEqual(read(body), [], JSON.stringify(body))
   })
@@ -406,10 +408,10 @@ describe('Google\'s two requests', () => {
     assert.equal(
       read.antigravity!.error,
       'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier "free-tier", paidTier "g1-pro-tier", Google\'s shared consumer project, fields {currentTier, paidTier, cloudaicompanionProject, gcpManaged}; ' +
-        'summary fields {groups, description}; groups "Claude and GPT models" [' +
-        '"3p-weekly" (window "weekly", remainingFraction 0.5, displayName "Weekly Limit Remaining", fields {bucketId, displayName, window, resetTime, remainingFraction, description}); ' +
+        'summary fields {groups, description}; groups "claude and gpt models" [' +
+        '"3p-weekly" (window "weekly", remainingFraction 0.5, displayName "weekly limit remaining", fields {bucketId, displayName, window, resetTime, remainingFraction, description}); ' +
         '"3p-5h" (window "5h", remainingFraction none, disabled true, displayName withheld, fields {bucketId, displayName, window, disabled})] | ' +
-        'withheld [withheld (window "weekly", remainingFraction none, fields {bucketId, window, remainingAmount})]',
+        '"*-*" ["*.*_*" (window "weekly", remainingFraction none, fields {bucketId, window, remainingAmount})]',
     )
     for (const secret of ['person@example.com', 'aicode-consumers', 'ya29', 'Google AI Pro', 'refresh in']) assert.ok(!read.antigravity!.error!.includes(secret), secret)
 
@@ -422,8 +424,8 @@ describe('Google\'s two requests', () => {
     assert.equal(
       placeholder,
       'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier "standard-tier", paidTier none, the account\'s own project, fields {currentTier, cloudaicompanionProject}; ' +
-        'summary fields {groups}; groups "All Models" [' +
-        '"gemini-pro" (window none, remainingFraction 1, fields {bucketId, remainingFraction}); withheld (window none, remainingFraction 1, fields {bucketId, remainingFraction})]',
+        'summary fields {groups}; groups "all models" [' +
+        '"gemini-pro" (window none, remainingFraction 1, fields {bucketId, remainingFraction}); "*-*-*-claude" (window none, remainingFraction 1, fields {bucketId, remainingFraction})]',
     )
     assert.ok(!placeholder.includes('own-project-4821'))
 
@@ -431,10 +433,10 @@ describe('Google\'s two requests', () => {
     const refused = google({ status: 200, body: { ineligibleTiers: [{ tierId: 'free-tier', reasonCode: 'GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT', reasonMessage: 'person@example.com may not' }] } })
     assert.equal(
       (await refused.limits.read()).antigravity!.error,
-      'loadCodeAssist named no project: currentTier none, paidTier none, no project, ineligibleTiers "free-tier" "GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT", fields {ineligibleTiers}',
+      'loadCodeAssist named no project: currentTier none, paidTier none, no project, ineligibleTiers "free-tier" "google_tos_not_supported_by_client", fields {ineligibleTiers}',
     )
   })
-  it('C89 every value and name the error shows, under one rule: an email, a token, the project, in any field, hidden in any way, withheld', async () => {
+  it('C89 the error writes nothing of Google\'s but its own vocabulary, `*` for any other word, and fractions: whatever Google sends', async () => {
     const project = 'own-project-4821'
     const email = 'person@example.com'
     const token = 'ya29.a0AfB_secret'
@@ -442,24 +444,62 @@ describe('Google\'s two requests', () => {
       ownproject4821: true,
       [email]: 1,
       groups: [
-        { displayName: 'own\u200bproject4821', buckets: [{ bucketId: `quota ${token}`, window: 'own project 4821', disabled: email, displayName: 'OWN_PROJECT_4821' }] },
+        { displayName: 'own​project4821', buckets: [{ bucketId: `quota ${token}`, window: 'own project 4821', disabled: email, displayName: 'OWN_PROJECT_4821' }] },
         { displayName: 'Claude and GPT models', buckets: [{ bucketId: 'gemini-5h', window: '5h', disabled: [project], remainingFraction: 'x', [`a${token}`]: 1, 'person%40example.com': 2 }] },
         { displayName: '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', buckets: [{ bucketId: 'x eyJhbGciOiJFZERTQSJ9 y', window: 'AIzaSyD', displayName: '1//0gRefresh' }, { bucketId: 'a8f3k29d0s7g6h5j4k3l2', displayName: `${'x'.repeat(65)}` }] },
       ],
     }
     const { limits } = google({ status: 200, body: { currentTier: { id: email }, paidTier: { id: token }, cloudaicompanionProject: project, [project]: 1, ineligibleTiers: [{ tierId: project, reasonCode: `${token} ${email}` }] } }, hostile)
-    const error = (await limits.read()).antigravity!.error!
     assert.equal(
-      error,
-      'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier withheld, paidTier withheld, the account\'s own project, ineligibleTiers withheld withheld, fields {currentTier, paidTier, cloudaicompanionProject, withheld, ineligibleTiers}; ' +
-        'summary fields {withheld, withheld, groups}; groups withheld [withheld (window withheld, remainingFraction none, disabled not a boolean, displayName withheld, fields {bucketId, window, disabled, displayName})] | ' +
-        '"Claude and GPT models" ["gemini-5h" (window "5h", remainingFraction none, disabled not a boolean, fields {bucketId, window, disabled, remainingFraction, withheld, withheld})] | ' +
-        'withheld [withheld (window withheld, remainingFraction none, displayName withheld, fields {bucketId, window, displayName}); withheld (window none, remainingFraction none, displayName withheld, fields {bucketId, displayName})]',
+      (await limits.read()).antigravity!.error!,
+      'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier withheld, paidTier "*.*_*", the account\'s own project, ineligibleTiers "*-*-*" withheld, fields {currentTier, paidTier, cloudaicompanionProject, withheld, ineligibleTiers}; ' +
+        'summary fields {"*", withheld, groups}; groups withheld ["quota *.*_*" (window "* * *", remainingFraction none, disabled not a boolean, displayName "*_*_*", fields {bucketId, window, disabled, displayName})] | ' +
+        '"claude and gpt models" ["gemini-5h" (window "5h", remainingFraction none, disabled not a boolean, fields {bucketId, window, disabled, remainingFraction, withheld, withheld})] | ' +
+        '"*-*" ["* * *" (window "*", remainingFraction none, displayName withheld, fields {bucketId, window, displayName}); "*" (window none, remainingFraction none, displayName withheld, fields {bucketId, displayName})]',
     )
-    const flat = error.toLowerCase().replace(/[^a-z0-9]/g, '')
-    for (const secret of [project, email, token, 'GOCSPX', 'eyJ', 'AIza', '1//', 'a8f3k29d0s7g6h5j4k3l2']) {
-      assert.ok(!error.includes(secret), secret)
-      assert.ok(!flat.includes(secret.toLowerCase().replace(/[^a-z0-9]/g, '')), `${secret}, compacted`)
+
+    // A judge's probe: an opaque token across separators, a telephone number, the project as a number in each fraction.
+    const numeric = google({ status: 200, body: { cloudaicompanionProject: '123456789012', currentTier: { id: 'm9Jx4QpY7vR2nK5f_hT8cW3sA6dL1uG0b_ZqE' } } }, {
+      groups: [{ displayName: 'Claude and GPT models', buckets: [
+        { bucketId: 'm9Jx4QpY7vR2nK5f_hT8cW3sA6dL1uG0b_ZqE', displayName: '+33 6 12 34 56 78', remainingFraction: 123456789012 },
+        { bucketId: 'gemini-weekly', displayName: '33 6 12 34 56 78', remaining: { case: 'remainingFraction', value: 123456789012 } },
+        { bucketId: '3p-5h', remainingFraction: 0.123456789012 },
+      ] }],
+    })
+    assert.equal(
+      (await numeric.limits.read()).antigravity!.error!,
+      'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier "*_*_*", paidTier none, the account\'s own project, fields {cloudaicompanionProject, currentTier}; ' +
+        'summary fields {groups}; groups "claude and gpt models" [' +
+        '"*_*_*" (window none, remainingFraction not a fraction, displayName withheld, fields {bucketId, displayName, remainingFraction}); ' +
+        '"gemini-weekly" (window none, remainingFraction not a fraction, displayName "* * * * * *", fields {bucketId, displayName, remaining}); ' +
+        '"3p-5h" (window none, remainingFraction 0.1235, fields {bucketId, remainingFraction})]',
+    )
+    // An answer that is not JSON: not a word of it, which JSON.parse's own error would quote.
+    const garbled = limitsWith(async (input) => (input.host === 'daily-cloudcode-pa.googleapis.com' ? { status: 200, body: input.path.endsWith('loadCodeAssist') ? JSON.stringify(GOOGLE_ASSIST) : 'person@example.com ya29.secret' } : { status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }), ['antigravity'])
+    assert.equal((await garbled.limits.read()).antigravity!.error, 'daily-cloudcode-pa.googleapis.com answered no JSON to /v1internal:retrieveUserQuotaSummary')
+    // A project made of Google's own words: the part that would hold it withheld whole.
+    const worded = google({ status: 200, body: { cloudaicompanionProject: 'gemini-pro-weekly', currentTier: { id: 'free-tier' } } }, { groups: [{ displayName: 'Gemini Pro Weekly', buckets: [] }] })
+    assert.equal((await worded.limits.read()).antigravity!.error!, 'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier "free-tier", paidTier none, the account\'s own project, fields {cloudaicompanionProject, currentTier}; summary withheld, as it would hold the project')
+
+    // Any answer at all: random strings in every place the error looks, and random keys. No string of Google's reaches
+    // the error but a word of the vocabulary; no run of digits but a fraction's.
+    let seed = 7
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
+    const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_. @+%/:​'
+    const text = () => Array.from({ length: 4 + Math.floor(random() * 30) }, () => alphabet[Math.floor(random() * alphabet.length)]).join('')
+    // The error's own words, beside the vocabulary and the fields' names the code lists.
+    const own = 'daily cloudcode pa googleapis com gave no window loadcodeassist currenttier paidtier none the account s own project google shared consumer ineligibletiers fields summary inside buckets groups unnamed withheld remainingfraction not a fraction disabled boolean displayname string an object bucketid true false as it would hold'
+    const vocabulary = new Set([...own.split(' '), ...DIAGNOSTIC_WORDS, ...[...DIAGNOSTIC_FIELDS].map((f) => f.toLowerCase())])
+    for (let round = 0; round < 200; round += 1) {
+      const sent = [text(), text(), text(), text(), text(), text(), text(), text()]
+      const bucket = { bucketId: sent[0], window: sent[1], displayName: sent[2], [sent[3]!]: sent[4], remainingFraction: random() * 1e12, disabled: sent[5] }
+      const probe = google({ status: 200, body: { cloudaicompanionProject: sent[6], currentTier: { id: sent[7] }, paidTier: { id: sent[3] }, ineligibleTiers: [{ tierId: sent[4], reasonCode: sent[5] }] } }, { [sent[7]!]: 1, groups: [{ displayName: sent[6], buckets: [bucket] }] })
+      const error = (await probe.limits.read()).antigravity!.error!
+      for (const run of error.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        const allowed = vocabulary.has(run) || /^\d{1,4}$/.test(run)
+        assert.ok(allowed, `${run} in ${error}`)
+      }
+      for (const value of sent) for (const piece of value.match(/[A-Za-z0-9]{5,}/g) ?? []) if (!/^[a-z]+$/i.test(piece)) assert.ok(!error.includes(piece), `${piece} of ${value}`)
     }
   })
 })
