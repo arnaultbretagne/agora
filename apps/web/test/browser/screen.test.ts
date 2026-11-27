@@ -1782,7 +1782,11 @@ test('U69 the queue\'s commands: each message a Write that may wait; the cross a
 
 test('U72 a message waiting, then Cancel: what it says, nothing goes; a next message: the first\'s turn, then its own', async () => {
   const page = await fresh()
-  await started(page, 'before the cancel')
+  // An agent that takes no message into its turn, as opencode: the next message's own turn comes once the first's has
+  // ended. One that does may take it into the first's, should that turn still run as it goes (log.md, "Into the turn").
+  const factory = c.kube.bridgeFactory
+  c.kube.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { noSteering: true })
+  await started(page, 'before the cancel').finally(() => (c.kube.bridgeFactory = factory))
   await send(page, '/tool-open 30')
   await cancelButton(page).waitFor()
   await thread(page).getByText('A long command').waitFor()
