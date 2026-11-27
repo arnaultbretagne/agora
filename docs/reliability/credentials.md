@@ -46,6 +46,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R36 | 2026-11-26 | `29747ee` | unit | This agent's machine: `packages/log/test/deadline.test.ts`, the deadline's and the token's arithmetic played minute by minute over 6 h with production's values: `LEASE_SECONDS` 600, a 60 s step, tokens of an hour. |
 | R37 | 2026-11-27 | `db5ff2b` | unit | The `check` job of the push to `feat/limits-without-zai` (GitHub Actions job 140398526642), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The `check` job of pull request #248 on the same commit (140398708240), all green too. The gateway is not run: a stub answers each host with its provider's C36 answer, z.ai's included. |
 | R38 | 2026-11-27 | `da92b08` | unit, local | The `check` job of pull request #249 (GitHub Actions job 140399025920), all green: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`) for the log's tests. For C36, Google's quota summary as token-monitor captured it from a Google AI Pro account on 2026-10-20 (Javis603/token-monitor `6d13b00`, `tests/fixtures/antigravityQuotaSummaryArgon.json`, `daily`), replayed in the test; for C37 a stand-in gateway and provider over TLS, as R16; a real signer with a key of its own. No Google, no gateway. |
+| R39 | 2026-11-27 | `8ea07fe` | unit, local | The `check` job of pull request #249 on the merge of `main` (GitHub Actions job 140427817051): the credentials, web, server and preview tests green — V6 skipped, no Docker there —, the job red for U81 and U72 of `screen.test.ts`, which `main`'s push run at `20abc8d` fails too (U81); ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). Google's answer and the stand-ins as R38. |
 
 ## Cases
 
@@ -202,6 +203,11 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C37 | simulated: stub (a stand-in gateway and provider) | local | R38 | proven | As R16, the provider seeing a `GET`; then a `POST` of `{"project":"p"}` to `/v1internal:retrieveUserQuotaSummary`: at the provider with that body, `content-type: application/json`, `Bearer agora-placeholder`; 200. |
 | C83 | — | unit | R38 | proven | Of Google, two grants on `daily-cloudcode-pa.googleapis.com`, `POST`: `^/v1internal:loadCodeAssist$`, `^/v1internal:retrieveUserQuotaSummary$`. Not covered: a `GET` of the summary, a `PUT` of `loadCodeAssist`, `?alt=json`, a suffix, `retrieveUserQuota`, `fetchAvailableModels`, `onboardUser`, `streamGenerateContent`, `cloudcode-pa.googleapis.com`, `www.googleapis.com` `/oauth2/v2/userinfo`, `oauth2.googleapis.com` `/token`; no other `POST`; no grant on the Internet. |
 | C84 | simulated: stub (the gateway answers) | unit | R38 | proven | Two requests on `daily-cloudcode-pa.googleapis.com`, `POST`: `loadCodeAssist` with `ideType` `ANTIGRAVITY`, `platform` `LINUX_AMD64`, `pluginType` `GEMINI`, then the summary with `{ project: "example-project-12345" }`, both `antigravity/1.5.13 linux/amd64`, the token's `sub` `agora limits`; windows 0 % and 0.76 %, not stale. The project as `{ id }`: sent. No project: the summary not asked, no window, `stale`, "loadCodeAssist named no project". A 403: not asked, "daily-cloudcode-pa.googleapis.com answered 403 to /v1internal:loadCodeAssist". |
+| C32 | — | unit | R39 | proven | As R38. |
+| C36 | — | unit | R39 | proven | As R38 for Claude, ChatGPT and Gemini; z.ai's reader as R37. |
+| C37 | simulated: stub (a stand-in gateway and provider) | local | R39 | proven | As R38. |
+| C83 | — | unit | R39 | proven | As R38. |
+| C84 | simulated: stub (the gateway answers) | unit | R39 | proven | As R38. |
 
 The partial verdicts are tracked in #107.
 
