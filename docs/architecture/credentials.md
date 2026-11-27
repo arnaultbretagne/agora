@@ -203,6 +203,7 @@ flowchart LR
   Gateway -- the account's credential --> Anthropic[api.anthropic.com]
   Gateway --> ChatGPT[chatgpt.com]
   Gateway --> ZAI[api.z.ai]
+  Gateway --> Xiaomi[token-plan-ams.xiaomimimo.com]
 ```
 
 Claude's endpoint asks more of a credential than inference does: the operator's setup-token cannot
@@ -212,3 +213,7 @@ once, and the gateway sees the new one a minute later. That login ends after abo
 whatever its renewals; the operator logs in again before then.
 
 The reads are few: when someone looks, and at most once every five minutes. z.ai's is not read for now, its subscription lapsed: its endpoint stays in the code, to be read again.
+
+One account is read though no profile draws from it: the operator's Xiaomi MiMo Token Plan, which no harness uses. It
+has no 5-hour or weekly window, only a quota of credits for its billing period, a month or a year, and the header shows
+that period as a window of its own.

@@ -575,6 +575,9 @@ test('U42 the context and the limits: the view\'s usage; every account worth sho
     ],
     'in order; failed after a read, or never read with a reason: shown; with neither windows nor a reason: left out',
   )
+  const mimo: AccountLimits = { windows: [{ kind: 'period', usedPercent: 15, resetsAt: '2027-09-21T23:59:59Z' }], plan: 'pro', checkedAt: '2026-10-07T10:00:00Z', stale: false, error: null }
+  assert.deepEqual(subscriptions({ xiaomi: mimo }).map((a) => [a.profile, a.name, a.limits]), [['xiaomi', 'Xiaomi MiMo', mimo]], 'a billing period alone: shown')
+  assert.equal(fullest(subscriptions({ anthropic: claude, xiaomi: { ...mimo, windows: [{ ...mimo.windows[0]!, usedPercent: 91 }] } })), 91, 'the billing period counts too')
   assert.deepEqual(subscriptions(null), [], 'not read yet')
   assert.deepEqual(subscriptions({}), [], 'the server reads none')
   assert.deepEqual(subscriptions({ chatgpt: { ...unread, error: null } }), [], 'nothing and no reason: nothing')
@@ -587,7 +590,7 @@ test('U42 the context and the limits: the view\'s usage; every account worth sho
     ['45m', '2h', '2h 10m', '3d', '3d 4h', null],
   )
   assert.equal(resetIn(null, now), null)
-  assert.deepEqual([windowName('five_hour'), windowName('weekly')], ['5-hour', 'Weekly'])
+  assert.deepEqual([windowName('five_hour'), windowName('weekly'), windowName('period')], ['5-hour', 'Weekly', 'Billing period'])
 })
 
 test('U45 attachments: what each file becomes for what the agent accepts; the prompt in order; a message\'s blocks shown back', async () => {
