@@ -368,9 +368,10 @@ test('V12 the fixed limits: GET /api/limits answers the invented subscriptions p
     const ms = Date.parse(at) - offset
     assert.ok(ms >= asked - 1000 && ms <= answered + 1000, `${at}: ${String(offset)} ms from the request`)
   }
-  assert.deepEqual(Object.keys(limits), ['anthropic', 'chatgpt', 'xiaomi'], 'z.ai is not read')
+  assert.deepEqual(Object.keys(limits), ['anthropic', 'antigravity', 'chatgpt', 'xiaomi'], 'z.ai is not read')
   const expected = {
     anthropic: { plan: null, stale: false, error: null, checked: 0, windows: [['five_hour', 42, 2 * HOUR + 10 * MINUTE], ['weekly', 68, 3 * DAY + 4 * HOUR]] },
+    antigravity: { plan: null, stale: false, error: null, checked: 0, windows: [['five_hour', 20, 3 * HOUR + 5 * MINUTE], ['weekly', 35, 6 * DAY + 2 * HOUR]] },
     chatgpt: { plan: 'pro', stale: false, error: null, checked: 0, windows: [['five_hour', 12, 4 * HOUR + 25 * MINUTE], ['weekly', 88, DAY + 6 * HOUR]] },
     xiaomi: { plan: 'lite', stale: false, error: null, checked: 0, windows: [['period', 34, 14 * DAY + 3 * HOUR]] },
   } as const
@@ -388,10 +389,11 @@ test('V12 the fixed limits: GET /api/limits answers the invented subscriptions p
     const popover = page.locator('[data-slot=limits-popover]')
     await popover.getByRole('region', { name: 'ChatGPT' }).waitFor()
     const sections = await popover.locator('section').evaluateAll((s) => s.map((e) => [e.getAttribute('aria-label'), (e as HTMLElement).innerText.trim()]))
-    assert.deepEqual(sections.map(([name]) => name), ['Claude', 'ChatGPT', 'Xiaomi MiMo'], 'no z.ai')
+    assert.deepEqual(sections.map(([name]) => name), ['Claude', 'Gemini', 'ChatGPT', 'Xiaomi MiMo'], 'no z.ai')
     assert.match(sections[0]![1]!, /^Claude\s+5-hour\s+42% · resets in 2h 10m\s+Weekly\s+68% · resets in 3d 4h$/)
-    assert.match(sections[1]![1]!, /^ChatGPT\s+pro\s+5-hour\s+12% · resets in 4h 25m\s+Weekly\s+88% · resets in 1d 6h$/i)
-    assert.match(sections[2]![1]!, /^Xiaomi MiMo\s+lite\s+Billing period\s+34% · resets in 14d 3h$/i)
+    assert.match(sections[1]![1]!, /^Gemini\s+5-hour\s+20% · resets in 3h 5m\s+Weekly\s+35% · resets in 6d 2h$/)
+    assert.match(sections[2]![1]!, /^ChatGPT\s+pro\s+5-hour\s+12% · resets in 4h 25m\s+Weekly\s+88% · resets in 1d 6h$/i)
+    assert.match(sections[3]![1]!, /^Xiaomi MiMo\s+lite\s+Billing period\s+34% · resets in 14d 3h$/i)
   } finally {
     await page.context().close()
   }

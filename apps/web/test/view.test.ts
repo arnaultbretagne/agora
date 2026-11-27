@@ -561,11 +561,13 @@ test('U42 the context and the limits: the view\'s usage; every account worth sho
   const codex: AccountLimits = { windows: [{ kind: 'five_hour', usedPercent: 12, resetsAt: null }, { kind: 'weekly', usedPercent: 88.4, resetsAt: null }], plan: 'pro', checkedAt: '2026-10-07T10:00:00Z', stale: false, error: null }
   const failed: AccountLimits = { ...claude, stale: true, error: 'api.z.ai answered 503' }
   const other: AccountLimits = { ...claude, windows: [{ kind: 'weekly', usedPercent: 3, resetsAt: null }] }
-  const limits = { anthropic: claude, chatgpt: codex, nobody: { ...unread, error: null }, zai: failed, vendor: other, google: unread }
+  const gemini: AccountLimits = { ...claude, windows: [{ kind: 'weekly', usedPercent: 0.76, resetsAt: '2026-10-11T04:15:26Z' }] }
+  const limits = { anthropic: claude, antigravity: gemini, chatgpt: codex, nobody: { ...unread, error: null }, zai: failed, vendor: other, google: unread }
   assert.deepEqual(
     subscriptions(limits).map((a) => [a.profile, a.name, a.limits]),
     [
       ['anthropic', 'Claude', claude],
+      ['antigravity', 'Gemini', gemini],
       ['chatgpt', 'ChatGPT', codex],
       ['zai', 'z.ai', failed],
       ['vendor', 'vendor', other],

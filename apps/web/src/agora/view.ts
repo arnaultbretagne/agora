@@ -1266,7 +1266,7 @@ const WINDOW_NAMES: Record<WindowKind, string> = { five_hour: '5-hour', weekly: 
 /** A window as people name it. */
 export const windowName = (kind: WindowKind): string => WINDOW_NAMES[kind]
 
-const PROVIDER_NAMES: Record<string, string> = { anthropic: 'Claude', chatgpt: 'ChatGPT', xiaomi: 'Xiaomi MiMo', zai: 'z.ai' }
+const PROVIDER_NAMES: Record<string, string> = { anthropic: 'Claude', antigravity: 'Gemini', chatgpt: 'ChatGPT', xiaomi: 'Xiaomi MiMo', zai: 'z.ai' }
 
 /** A subscription in the header's limits (docs/specs/assistant-ui.md, "Context and limits"): its base profile, its provider's name, its limits. */
 export interface Subscription {
