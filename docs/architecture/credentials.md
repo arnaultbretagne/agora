@@ -211,4 +211,4 @@ session, while inference stays on the setup-token: renewing a login revokes its 
 once, and the gateway sees the new one a minute later. That login ends after about four weeks,
 whatever its renewals; the operator logs in again before then.
 
-The reads are few: when someone looks, and at most once every five minutes.
+The reads are few: when someone looks, and at most once every five minutes. z.ai's is not read for now, its subscription lapsed: its endpoint stays in the code, to be read again.

@@ -10,7 +10,7 @@ import { connect, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { compileProfile, getThroughGateway, GrantSigner, LIMIT_ENDPOINTS, limitsHttp, ProfileRefused, SubscriptionLimits, type GatewayGet } from '../src/index.ts'
+import { compileProfile, getThroughGateway, GrantSigner, LIMIT_ENDPOINTS, LIMITS_NOT_READ, limitsHttp, ProfileRefused, SubscriptionLimits, type GatewayGet } from '../src/index.ts'
 
 /** Answers as each provider did on 2026-10-07 (identifiers left out). */
 const ANSWERS: Record<string, unknown> = {
@@ -133,18 +133,32 @@ describe('the reads', () => {
   it('C34 each base profile with an endpoint, once per 5 minutes, one read at a time', async () => {
     const { limits, calls, clock } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }))
     const [first] = await Promise.all([limits.read(), limits.read()])
-    assert.deepEqual(Object.keys(first).sort(), ['anthropic', 'chatgpt', 'zai'], 'a repository has no limits')
-    assert.equal(calls.length, 3)
+    assert.deepEqual(Object.keys(first).sort(), ['anthropic', 'chatgpt'], 'a repository has no limits, z.ai is not read')
+    assert.equal(calls.length, 2)
     assert.equal(calls[0]!.proxy, 'gateway.test:3000')
     assert.equal(payload(calls[0]!.token).sub, 'agora limits')
     assert.deepEqual(first.anthropic!.windows.map((w) => w.usedPercent), [7, 19])
     assert.deepEqual([first.anthropic!.stale, first.anthropic!.error, first.anthropic!.checkedAt], [false, null, '2026-10-07T10:00:00.000Z'])
     clock.now += 4 * 60_000
     await limits.read()
-    assert.equal(calls.length, 3, 'within 5 minutes: the same')
+    assert.equal(calls.length, 2, 'within 5 minutes: the same')
     clock.now += 60_000
     await limits.read()
-    assert.equal(calls.length, 6, 'after: read again')
+    assert.equal(calls.length, 4, 'after: read again')
+  })
+
+  it('C34 z.ai, declared by a pool as in production, is not read: never asked, not in the answer, its reader kept', async () => {
+    assert.deepEqual([...LIMITS_NOT_READ], ['zai'])
+    assert.ok(Object.hasOwn(LIMIT_ENDPOINTS, 'zai'), 'its endpoint stays, to be read again')
+    // Every gateway answer is a good one, z.ai's too: had it been asked, it would have read.
+    const { limits, calls, clock } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }), ['anthropic', 'chatgpt', 'zai'])
+    const read = await limits.read()
+    assert.deepEqual(Object.keys(read).sort(), ['anthropic', 'chatgpt'])
+    assert.deepEqual(calls.map((c) => c.host).sort(), ['api.anthropic.com', 'chatgpt.com'], 'the others asked, z.ai never')
+    clock.now += 5 * 60_000
+    assert.equal((await limits.read()).zai, undefined, 'nor at the next read')
+    assert.ok(calls.every((c) => c.host !== 'api.z.ai'))
+    assert.equal(calls.length, 4)
   })
 
   it('C35 a failed read keeps the windows before it, stale, with why', async () => {
@@ -164,7 +178,7 @@ describe('the reads', () => {
       throw new Error('the gateway refused the tunnel: 403')
     })
     const read = await limits.read()
-    assert.deepEqual(read.zai, { windows: [], plan: null, checkedAt: null, stale: true, error: 'the gateway refused the tunnel: 403' })
+    assert.deepEqual(read.chatgpt, { windows: [], plan: null, checkedAt: null, stale: true, error: 'the gateway refused the tunnel: 403' })
   })
 
   it('C35 a window whose reset has passed holds nothing, until the next read', async () => {
@@ -179,7 +193,8 @@ describe('the reads', () => {
 
 describe('GET /api/limits', () => {
   it('C34 the limits by profile; nothing when the server cannot read them; GET only', async () => {
-    const { limits } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }), ['anthropic'])
+    // The production catalogue: pools on `anthropic`, `chatgpt` and `zai`, and a repository's profile.
+    const { limits } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }))
     const server = createHttpServer((req, res) => {
       void limitsHttp(req.url === '/off/api/limits' ? undefined : limits, Object.assign(req, { url: req.url?.replace('/off', '') }), res).then((handled) => handled || res.writeHead(404).end())
     })
@@ -192,7 +207,7 @@ describe('GET /api/limits', () => {
     try {
       const on = await call('GET', '/api/limits')
       assert.equal(on.status, 200)
-      assert.deepEqual(Object.keys(on.body.limits as object), ['anthropic'])
+      assert.deepEqual(Object.keys(on.body.limits as object), ['anthropic', 'chatgpt'], 'no zai')
       assert.deepEqual(await call('GET', '/off/api/limits'), { status: 200, body: { limits: {} } })
       assert.equal((await call('POST', '/api/limits')).status, 405)
     } finally {
