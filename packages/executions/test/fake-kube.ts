@@ -41,6 +41,8 @@ export class FakeKube implements KubeApi {
   /** Pools beyond the two built in, by name and harness: a newer image of a harness is another pool. */
   readonly morePools: [name: string, harness: string][] = []
   private readonly watchers = new Set<(event: WatchEvent) => void>()
+  /** Every event sent, in order: a watch from a resourceVersion gets those after it first, as from the API server. */
+  private readonly history: WatchEvent[] = []
   private readonly tokens = mkdtempSync(join(tmpdir(), 'tokens-'))
   private version = 1
   private podCounter = 0
@@ -66,6 +68,7 @@ export class FakeKube implements KubeApi {
 
   private emit(type: WatchEvent['type'], claim: Mutable): void {
     const event = { type, object: structuredClone(claim) } as unknown as WatchEvent
+    this.history.push(event)
     for (const watcher of this.watchers) watcher(event)
   }
 
@@ -77,7 +80,12 @@ export class FakeKube implements KubeApi {
     return { items: [...this.claims.values()].map((claim) => structuredClone(claim) as unknown as Claim), resourceVersion: String(this.version) }
   }
 
-  watchClaims(_selector: string, _version: string, onEvent: (event: WatchEvent) => void, signal: AbortSignal): Promise<void> {
+  /**
+   * From `version` on, as the API server: the events after it first, then the new ones — none lost between a list
+   * and the watch it starts. No version: the new ones alone.
+   */
+  watchClaims(_selector: string, version: string, onEvent: (event: WatchEvent) => void, signal: AbortSignal): Promise<void> {
+    if (version !== '') for (const event of this.history) if (Number(event.object.metadata.resourceVersion) > Number(version)) onEvent(structuredClone(event))
     this.watchers.add(onEvent)
     return new Promise((resolve) => {
       signal.addEventListener('abort', () => {
@@ -148,6 +156,8 @@ export class FakeKube implements KubeApi {
         }
         this.claims.delete(name)
         if (podName !== undefined) this.sandboxes.delete(podName)
+        // A deletion is a change of its own, under a resourceVersion of its own.
+        this.bump(claim)
         this.emit('DELETED', claim)
       })()
     }

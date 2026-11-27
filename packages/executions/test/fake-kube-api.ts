@@ -34,7 +34,7 @@ export async function serveFakeKube(kube: FakeKube): Promise<FakeKubeApi> {
           res.writeHead(200, { 'content-type': 'application/json' })
           const abort = new AbortController()
           req.on('close', () => abort.abort())
-          await kube.watchClaims('', '', (event: WatchEvent) => res.write(`${JSON.stringify({ type: event.type, object: visible(kube, event.object) })}\n`), abort.signal)
+          await kube.watchClaims('', url.searchParams.get('resourceVersion') ?? '', (event: WatchEvent) => res.write(`${JSON.stringify({ type: event.type, object: visible(kube, event.object) })}\n`), abort.signal)
           res.end()
           return
         }
