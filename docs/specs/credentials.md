@@ -624,8 +624,8 @@ Bearer and lets the rest through.
 
 ## Limits
 
-Each account's limits — a subscription's 5-hour and weekly windows — as its provider's own usage
-endpoint gives them. The server reads them through the gateway, as an execution goes out, with a
+Each account's limits — a subscription's 5-hour and weekly windows, or its billing period — as its
+provider's own usage endpoint gives them. The server reads them through the gateway, as an execution goes out, with a
 grant it signs for itself: the `limits` profile, bound to its own Pod's address. It never holds a
 provider's credential.
 
@@ -633,22 +633,33 @@ provider's credential.
 | --- | --- | --- |
 | `anthropic` | `GET api.anthropic.com/api/oauth/usage`, with `anthropic-beta: oauth-2025-04-20` | `five_hour` and `seven_day`, every model's week: `utilization` in percent, `resets_at`. The route `anthropic-usage` sets the cluster's Claude login; the setup-token is answered 403. |
 | `chatgpt` | `GET chatgpt.com/backend-api/wham/usage` | `rate_limit.primary_window` and `secondary_window`, told apart by `limit_window_seconds` (5 hours, 7 days): `used_percent`, `reset_at`; the plan, `plan_type`. |
+| `xiaomi` | `GET token-plan-ams.xiaomimimo.com/v1/platform/token_plan` | One window, `period`, the Token Plan's billing period, a month or a year: `quota.used_credits` of `quota.total_credits` in percent, to 100 at most; its reset `period.end_at`, `YYYY-MM-DD HH:MM:SS` in UTC; the plan, `plan_code`. No window while `total_credits` is 0, nor for an answer whose `object` is not `token_plan`. The route `xiaomi` sets the operator's Token Plan key, `tp-…`, of the European cluster ("Xiaomi's answer"). |
 | `zai` | `GET api.z.ai/api/monitor/usage/quota/limit` | Not read, for now ("Not read"). `data.limits` of type `TOKENS_LIMIT` or `CREDIT_LIMIT`: unit 3 the 5-hour window, unit 6 the week; `percentage`, `nextResetTime`, absent until the window has started; the plan, `level`. The MCP calls' limit is left out. |
 
 | Element | Rule |
 | --- | --- |
 | The `limits` profile | Agora's own: a `GET` on the exact path of each endpoint above, nothing else. The catalogue does not know it: a Create or a Scope naming it is refused, `unknown_profile`. |
 | The `merge` profile | Agora's own, for the merge card (`merge.md`), bound to the server's address like `limits`: on `api.github.com`, `GET` of a pull request and of its reviews, `PUT` of its merge, nothing else, as `identity` `operator` ("GitHub identities"). Unknown to the catalogue: `unknown_profile`. |
-| Which accounts | The base profiles of the catalogue's pools that have an endpoint, but those not read. |
+| Which accounts | The base profiles of the catalogue's pools that have an endpoint, but those not read; and, whatever the pools, those read without a pool: `xiaomi`, the operator's Xiaomi MiMo subscription, which no harness uses. A departure, approved by the operator: the only account read that no execution draws from. `xiaomi` is no profile of the catalogue, base or other, so no execution can hold it: only the `limits` grant opens its host. It is listed in `LIMITS_WITHOUT_POOL` (`packages/credentials/src/limits.ts`); an account not read wins over it. |
 | Not read | `zai`: the operator's z.ai subscription has lapsed (2026-11), and its endpoint answers no window. Its endpoint stays in the code, and the `limits` grant still covers it, but it is never asked and `GET /api/limits` has no `zai`, whatever the pools declare; the opencode pool and the route `zai` are unchanged. A preview leaves it out too (`preview.md`, "The limits"). To read it again: take `zai` out of `LIMITS_NOT_READ` in `packages/credentials/src/limits.ts`, then out of this row and of C31, C34 and V12, whose tests expect it absent. |
 | When | When the interface asks, at most once every 5 minutes, one read at a time; each account on its own, 10 seconds at most. |
 | A failed read | The windows before it, kept, `stale`, with why. An account never read: no window, `stale`, why. |
 | A window whose reset has passed | 0 % and no reset, until the next read. |
-| `GET /api/limits` | `limits`: by base profile, its `windows` (`kind` `five_hour` or `weekly`, `usedPercent`, `resetsAt`), `plan`, `checkedAt`, `stale`, `error`. Empty when the server cannot read them. `GET` only. |
+| `GET /api/limits` | `limits`: by base profile, its `windows` (`kind` `five_hour`, `weekly` or `period` — a billing period, a month or a year —, `usedPercent`, `resetsAt`), `plan`, `checkedAt`, `stale`, `error`. Empty when the server cannot read them. `GET` only. |
 | Configuration | `POD_IP`, the server's own address, and `GATEWAY_CA_FILE`, the gateway's root. Without `POD_IP` or the gateway, no limits. |
 
 The server reaches the gateway on port 3000, and the gateway accepts it beside the sandboxes. The
 windows are the whole account's: they count what the operator spends elsewhere too.
+
+**Xiaomi's answer.** No one here holds the key, so its shape comes from Xiaomi's documentation, "Query Token Plan
+Credits" (mimo.mi.com/docs/en-US/api/asset/credits-get, read on 2026-11-27): `GET /v1/platform/token_plan`, no
+parameter, `Authorization: Bearer` a dedicated `tp-` key, on the host of the subscription's region — `token-plan-cn`,
+`-sgp` or `-ams.xiaomimimo.com`; the operator's is the European one. Its example: `{"object": "token_plan", "plan_code":
+"pro", "period": {"start_at": "2026-09-21 23:59:59", "end_at": "2027-09-21 23:59:59"}, "quota": {"total_credits":
+10000000, "used_credits": 1500000, "remaining_credits": 8500000}, "auto_renew": false, "claw_enabled": false}`, the times
+UTC. A public client reads it so: CodexBar (github.com/steipete/CodexBar, `Sources/CodexBarCore/Resources/Plugins/mimo.ts`,
+#5138), from a live read on a Singapore account (#5124). Without a key, the path answers 401 `invalid_api_key` on each of
+the three hosts. Xiaomi's plans have no 5-hour, daily or weekly limit: their one window is the billing period.
 
 ## What the template adds
 
@@ -702,7 +713,7 @@ call. The test page does it itself when the agent offers the option.
 | C28 | Node's own `fetch` in the adapter's environment, before any credential; the same without `NODE_USE_ENV_PROXY` | `NODE_USE_ENV_PROXY` is `1`; the request fails, refused by the outbound proxy: one refusal counted. Without it: no refusal counted. |
 | C29 | A warm token, and an execution's, for Pods whose Sandboxes record known addresses | Each token's `ip` is its Pod's address as the Sandbox records it; a signer asked for a token without a valid address refuses. |
 | C30 | A token whose `ip` is another address than the one the request comes from; one with no `ip` | 403 from the gateway, on a route with a credential and on `internet`. The same token from its own address: let through. |
-| C31 | `GET /api/limits` on the server in the cluster, its pools declaring `anthropic`, `chatgpt` and `zai` | For each but `zai`, not read, its 5-hour and weekly windows from the provider, `stale` false; no `zai`; the gateway logs a request per account read from the server, under the `limits` grant; a second request within 5 minutes reaches no provider. |
+| C31 | `GET /api/limits` on the server in the cluster, its pools declaring `anthropic`, `chatgpt` and `zai` | For each but `zai`, not read, its 5-hour and weekly windows from the provider, and for `xiaomi`, no pool's, its billing period, `stale` false; no `zai`; the gateway logs a request per account read from the server, under the `limits` grant; a second request within 5 minutes reaches no provider. |
 | C32 | The grant the server signs for the limits | Bound to the server's address; a `GET` on the exact path of each usage endpoint; another path, a query, or another method of the same host: not covered. |
 | C33 | A Create naming `limits` | Refused, `unknown_profile`; nothing written. |
 | C34 | `GET /api/limits` twice at once, again within 5 minutes, then after; pools with base profiles with and without an endpoint, `zai` among them, as in production; a `POST`; the server without an address | One read per account with an endpoint, through the gateway with the `limits` grant, `zai` never asked nor in `limits`, its endpoint kept; nothing more within 5 minutes; read again after; 405; `limits` empty. |
@@ -757,3 +768,6 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C80 | A pool declaring `anthropic`; a Create, a Scope and a `spawn_agent` naming `anthropic`, `zai`, `chatgpt` or `antigravity`, `OFFERED_PROFILES` empty, then listing other profiles; the same Create without it | Each `unknown_profile`, nothing written — no Create, no Scope, no Workstream, no approval —, no token handed; the Create without it accepted, its `baseProfiles` `anthropic`, its token naming `anthropic` and its own profiles. |
 | C81 | An execution living past its first token's life, a command left running after its turn | A new token before each one expires, with the same profiles; every deadline Agora sets at least half a token's life before the end of the token in place; the bridge holding the last. |
 | C82 | A token renewed — the same `sub` and `grants` — while a tunnel is open; then one with other grants | The tunnel opened with the previous token stays open, and closes 30 s before that token expires; later tunnels carry the new one. The other grants close the open tunnels at once. |
+| C85 | Xiaomi's answer as its documentation gives it ("Xiaomi's answer"); a month of a Lite plan part spent; no credit; more used than the total; an end it cannot read; another `object` | One window, `period`: 15 % until `2027-09-21T23:59:59.000Z`, the plan `pro`; used over total, unrounded, until its end; no window and no plan; 100 %; no reset; no window. |
+| C86 | The `limits` grant on Xiaomi: the Token Plan's credits with `GET`, with `POST`, `DELETE`, a query, a suffix; inference; Xiaomi's other regions and hosts; the profile `xiaomi` | One grant on `token-plan-ams.xiaomimimo.com`, `GET` on `^/v1/platform/token_plan$`; every other request not covered; no grant on the Internet; `xiaomi` no base profile, refused like `limits`. |
+| C87 | Pools declaring `chatgpt` and a repository's profile; then `anthropic` and `xiaomi`; then none | `chatgpt` and `xiaomi` read, `xiaomi` on `token-plan-ams.xiaomimimo.com` `/v1/platform/token_plan` under the `limits` grant, its billing period at 15 %; Claude not asked. Then `anthropic` and `xiaomi`, two requests. Then `xiaomi` alone. |
