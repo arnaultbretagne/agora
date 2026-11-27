@@ -9,6 +9,7 @@
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { LIMIT_ENDPOINTS, LIMITS_NOT_READ } from '@agora/credentials'
 import { canonical, fold, subagentOf, type Entry, type State, type Turn } from '@agora/log'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
@@ -999,7 +1000,8 @@ await check('C31', 'The accounts\' limits, read through the gateway', async () =
   const declared = [...new Set(((await api('GET', '/api/pools')).pools as Json[]).flatMap((p) => (p.baseProfiles as string[] | undefined) ?? []))].sort()
   const first = (await api('GET', '/api/limits')).limits as Record<string, { windows: { kind: string; usedPercent: number }[]; stale: boolean; error: string | null }>
   const read = Object.keys(first).sort()
-  assert(canonical(read) === canonical(declared.filter((p) => ['anthropic', 'chatgpt', 'zai'].includes(p))), `declared ${canonical(declared)}, read ${canonical(read)}`)
+  // Each declared base profile with an endpoint, but those not read: z.ai, its subscription lapsed.
+  assert(canonical(read) === canonical(declared.filter((p) => Object.hasOwn(LIMIT_ENDPOINTS, p) && !LIMITS_NOT_READ.has(p))), `declared ${canonical(declared)}, read ${canonical(read)}`)
   for (const [profile, account] of Object.entries(first)) {
     assert(!account.stale && account.error === null, `${profile}: ${String(account.error)}`)
     assert(canonical(account.windows.map((w) => w.kind)) === '["five_hour","weekly"]', `${profile}: ${canonical(account.windows)}`)

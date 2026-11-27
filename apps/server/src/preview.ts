@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { AccountLimits, SubscriptionLimits } from '@agora/credentials'
+import { LIMITS_NOT_READ, type AccountLimits, type SubscriptionLimits } from '@agora/credentials'
 import { startBridge, pushBundle, type Bridge } from '@agora/harness-bridge'
 import { sessionsDir } from '@agora/mock-agent/storage'
 import { HARNESS_LABEL, KubeError, SESSION_CONFIG_ANNOTATION, type Claim, type CredentialSource, type Json, type KubeApi, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from '@agora/executions'
@@ -337,14 +337,16 @@ const DAY = 24 * HOUR
 /**
  * What a preview's `GET /api/limits` answers (docs/specs/preview.md, "The limits"): four invented subscriptions, read
  * now, in the order the server gives them — Claude, no plan; Gemini, no plan; ChatGPT, `pro`, its week nearly spent;
- * z.ai, `lite`, its last read failed 40 minutes after the one its windows stand from. Each window starts again as long after the request as the last time it was asked.
+ * z.ai, `lite`, its last read failed 40 minutes after the one its windows stand from. Each window starts again as long
+ * after the request as the last time it was asked. Those production does not read (`LIMITS_NOT_READ`) are left out, as
+ * there: z.ai, for now.
  */
 export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLimits, 'read'> {
   return {
     read: async (): Promise<Record<string, AccountLimits>> => {
       const t = now()
       const at = (ms: number) => new Date(t + ms).toISOString()
-      return {
+      const invented: Record<string, AccountLimits> = {
         anthropic: {
           windows: [
             { kind: 'five_hour', usedPercent: 42, resetsAt: at(2 * HOUR + 10 * MINUTE) },
@@ -386,6 +388,7 @@ export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLi
           error: 'api.z.ai answered 503',
         },
       }
+      return Object.fromEntries(Object.entries(invented).filter(([profile]) => !LIMITS_NOT_READ.has(profile)))
     },
   }
 }

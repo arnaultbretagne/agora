@@ -239,6 +239,13 @@ export interface SubscriptionLimitsOptions {
   readonly now?: () => number
 }
 
+/**
+ * The base profiles whose endpoint is kept but not read (docs/specs/credentials.md, "Limits"): neither asked nor
+ * in `GET /api/limits`, whatever the pools declare. `zai`: the operator's z.ai subscription has lapsed since
+ * 2026-11. Taking a profile out of this set reads it again.
+ */
+export const LIMITS_NOT_READ: ReadonlySet<string> = new Set(['zai'])
+
 /** The accounts' limits, read through the gateway at most once per `maxAgeMs`, one read at a time. */
 export class SubscriptionLimits {
   private readonly options: SubscriptionLimitsOptions
@@ -255,7 +262,7 @@ export class SubscriptionLimits {
   }
 
   async read(): Promise<Record<string, AccountLimits>> {
-    const profiles = [...new Set(await this.options.profiles())].filter((p) => Object.hasOwn(LIMIT_ENDPOINTS, p)).sort()
+    const profiles = [...new Set(await this.options.profiles())].filter((p) => Object.hasOwn(LIMIT_ENDPOINTS, p) && !LIMITS_NOT_READ.has(p)).sort()
     const due = this.now() - this.readAt >= (this.options.maxAgeMs ?? 300_000) || profiles.some((p) => !this.last.has(p))
     if (due && profiles.length > 0) {
       this.reading ??= this.refresh(profiles).finally(() => {
