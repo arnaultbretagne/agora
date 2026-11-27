@@ -1,4 +1,4 @@
-// The accounts' limits (docs/specs/credentials.md, "Limits", C32 and C34–C37): each provider's answer read
+// The accounts' limits (docs/specs/credentials.md, "Limits", C32, C34–C37, C85 and C87): each provider's answer read
 // into windows, the grant Agora gives itself, the reads it keeps, and a real GET through a stand-in gateway.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -10,7 +10,7 @@ import { connect, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { compileProfile, getThroughGateway, GrantSigner, LIMIT_ENDPOINTS, LIMITS_NOT_READ, limitsHttp, ProfileRefused, SubscriptionLimits, type GatewayGet } from '../src/index.ts'
+import { compileProfile, getThroughGateway, GrantSigner, LIMIT_ENDPOINTS, LIMITS_NOT_READ, LIMITS_WITHOUT_POOL, limitsHttp, ProfileRefused, SubscriptionLimits, type GatewayGet } from '../src/index.ts'
 
 /** Answers as each provider did on 2026-10-07 (identifiers left out). */
 const ANSWERS: Record<string, unknown> = {
@@ -40,6 +40,20 @@ const ANSWERS: Record<string, unknown> = {
     },
   },
 }
+
+/**
+ * Xiaomi's documented answer, verbatim: "Query Token Plan Credits", mimo.mi.com/docs/en-US/api/asset/credits-get,
+ * as read on 2026-11-27. Its period's times are UTC, written without a zone.
+ */
+const XIAOMI = {
+  object: 'token_plan',
+  plan_code: 'pro',
+  period: { start_at: '2026-09-21 23:59:59', end_at: '2027-09-21 23:59:59' },
+  quota: { total_credits: 10000000, used_credits: 1500000, remaining_credits: 8500000 },
+  auto_renew: false,
+  claw_enabled: false,
+}
+ANSWERS.xiaomi = XIAOMI
 
 function signer(): GrantSigner {
   const dir = mkdtempSync(join(tmpdir(), 'limits-'))
@@ -81,6 +95,17 @@ describe('each provider', () => {
     })
   })
 
+  it('C85 Xiaomi MiMo: the billing period alone, the credits used of its total, until its end in UTC, and the plan', () => {
+    assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read(XIAOMI), { windows: [{ kind: 'period', usedPercent: 15, resetsAt: '2027-09-21T23:59:59.000Z' }], plan: 'pro' })
+    // A month of a Lite plan, part spent: used over total, unrounded.
+    const lite = { ...XIAOMI, plan_code: 'lite', period: { start_at: '2026-11-11 21:05:27', end_at: '2026-12-11 23:59:59' }, quota: { total_credits: 4100000000, used_credits: 1400000000, remaining_credits: 2700000000 } }
+    assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read(lite), { windows: [{ kind: 'period', usedPercent: (1400000000 / 4100000000) * 100, resetsAt: '2026-12-11T23:59:59.000Z' }], plan: 'lite' })
+    assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read({ ...XIAOMI, quota: { total_credits: 0, used_credits: 0, remaining_credits: 0 } }), { windows: [], plan: null }, 'no credit: no window')
+    assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read({ ...XIAOMI, quota: { total_credits: 100, used_credits: 130, remaining_credits: 0 } }).windows[0]!.usedPercent, 100, 'overspent: 100 %')
+    assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read({ ...XIAOMI, period: { start_at: '2026-09-21 23:59:59', end_at: 'next year' } }).windows, [{ kind: 'period', usedPercent: 15, resetsAt: null }], 'an end it cannot read: no reset')
+    assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read({ ...XIAOMI, object: 'error' }).windows, [], 'not a token plan: no window')
+  })
+
   it('C36 an answer of another shape gives no window', () => {
     for (const endpoint of Object.values(LIMIT_ENDPOINTS)) assert.deepEqual(endpoint.read({ error: 'nope' }).windows, [])
   })
@@ -92,12 +117,13 @@ describe('the grant Agora gives itself', () => {
     const claims = payload(credentials.token)
     assert.equal(claims.ip, '10.244.0.9')
     const grants = claims.grants as { host: string; path: string; methods: string[] }[]
-    assert.deepEqual(grants.map((g) => [g.host, g.methods]), [['api.anthropic.com', ['GET']], ['chatgpt.com', ['GET']], ['api.z.ai', ['GET']]])
+    assert.deepEqual(grants.map((g) => [g.host, g.methods]), [['api.anthropic.com', ['GET']], ['chatgpt.com', ['GET']], ['token-plan-ams.xiaomimimo.com', ['GET']], ['api.z.ai', ['GET']]])
     // The gateway's rule, replayed: host, path with the query, method.
     const allowed = (host: string, path: string, method = 'GET') => grants.some((g) => g.host === host && new RegExp(g.path).test(path) && g.methods.includes(method))
     assert.ok(allowed('api.anthropic.com', '/api/oauth/usage'))
     assert.ok(allowed('chatgpt.com', '/backend-api/wham/usage'))
     assert.ok(allowed('api.z.ai', '/api/monitor/usage/quota/limit'))
+    assert.ok(allowed('token-plan-ams.xiaomimimo.com', '/v1/platform/token_plan'))
     assert.ok(!allowed('api.anthropic.com', '/api/oauth/usage?x=1'))
     assert.ok(!allowed('api.anthropic.com', '/v1/messages'))
     assert.ok(!allowed('chatgpt.com', '/backend-api/wham/usage/other'))
@@ -133,18 +159,18 @@ describe('the reads', () => {
   it('C34 each base profile with an endpoint, once per 5 minutes, one read at a time', async () => {
     const { limits, calls, clock } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }))
     const [first] = await Promise.all([limits.read(), limits.read()])
-    assert.deepEqual(Object.keys(first).sort(), ['anthropic', 'chatgpt'], 'a repository has no limits, z.ai is not read')
-    assert.equal(calls.length, 2)
+    assert.deepEqual(Object.keys(first).sort(), ['anthropic', 'chatgpt', 'xiaomi'], 'a repository has no limits, z.ai is not read; xiaomi, no pool\'s, beside them (C87)')
+    assert.equal(calls.length, 3)
     assert.equal(calls[0]!.proxy, 'gateway.test:3000')
     assert.equal(payload(calls[0]!.token).sub, 'agora limits')
     assert.deepEqual(first.anthropic!.windows.map((w) => w.usedPercent), [7, 19])
     assert.deepEqual([first.anthropic!.stale, first.anthropic!.error, first.anthropic!.checkedAt], [false, null, '2026-10-07T10:00:00.000Z'])
     clock.now += 4 * 60_000
     await limits.read()
-    assert.equal(calls.length, 2, 'within 5 minutes: the same')
+    assert.equal(calls.length, 3, 'within 5 minutes: the same')
     clock.now += 60_000
     await limits.read()
-    assert.equal(calls.length, 4, 'after: read again')
+    assert.equal(calls.length, 6, 'after: read again')
   })
 
   it('C34 z.ai, declared by a pool as in production, is not read: never asked, not in the answer, its reader kept', async () => {
@@ -153,12 +179,33 @@ describe('the reads', () => {
     // Every gateway answer is a good one, z.ai's too: had it been asked, it would have read.
     const { limits, calls, clock } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }), ['anthropic', 'chatgpt', 'zai'])
     const read = await limits.read()
-    assert.deepEqual(Object.keys(read).sort(), ['anthropic', 'chatgpt'])
-    assert.deepEqual(calls.map((c) => c.host).sort(), ['api.anthropic.com', 'chatgpt.com'], 'the others asked, z.ai never')
+    assert.deepEqual(Object.keys(read).sort(), ['anthropic', 'chatgpt', 'xiaomi'])
+    assert.deepEqual(calls.map((c) => c.host).sort(), ['api.anthropic.com', 'chatgpt.com', 'token-plan-ams.xiaomimimo.com'], 'the others asked, z.ai never')
     clock.now += 5 * 60_000
     assert.equal((await limits.read()).zai, undefined, 'nor at the next read')
     assert.ok(calls.every((c) => c.host !== 'api.z.ai'))
-    assert.equal(calls.length, 4)
+    assert.equal(calls.length, 6)
+  })
+
+  it('C87 xiaomi is read though no pool draws from it; the other accounts only as the pools declare them', async () => {
+    assert.deepEqual(LIMITS_WITHOUT_POOL, ['xiaomi'])
+    const answer = async (input: GatewayGet) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) })
+    // Pools on `chatgpt` and a repository's profile: no pool declares xiaomi, nor Claude.
+    const { limits, calls } = limitsWith(answer, ['chatgpt', 'github:o/r:read'])
+    const read = await limits.read()
+    assert.deepEqual(Object.keys(read), ['chatgpt', 'xiaomi'])
+    assert.deepEqual(calls.map((c) => [c.host, c.path]).sort(), [['chatgpt.com', '/backend-api/wham/usage'], ['token-plan-ams.xiaomimimo.com', '/v1/platform/token_plan']], 'Claude never asked: no pool declares it')
+    const asked = calls.find((c) => c.host === 'token-plan-ams.xiaomimimo.com')!
+    assert.deepEqual([payload(asked.token).sub, asked.headers], ['agora limits', {}], 'under the limits grant, no header of its own')
+    assert.deepEqual(read.xiaomi, { windows: [{ kind: 'period', usedPercent: 15, resetsAt: '2027-09-21T23:59:59.000Z' }], plan: 'pro', checkedAt: '2026-10-07T10:00:00.000Z', stale: false, error: null })
+    // The control: a pool declaring Claude has it read; a pool declaring xiaomi too reads it once.
+    const both = limitsWith(answer, ['anthropic', 'xiaomi'])
+    assert.deepEqual(Object.keys(await both.limits.read()), ['anthropic', 'xiaomi'])
+    assert.equal(both.calls.length, 2)
+    // No pool at all: xiaomi still; z.ai, not read, never, even beside it.
+    const none = limitsWith(answer, [])
+    assert.deepEqual(Object.keys(await none.limits.read()), ['xiaomi'])
+    assert.deepEqual(none.calls.map((c) => c.host), ['token-plan-ams.xiaomimimo.com'])
   })
 
   it('C35 a failed read keeps the windows before it, stale, with why', async () => {
@@ -207,7 +254,7 @@ describe('GET /api/limits', () => {
     try {
       const on = await call('GET', '/api/limits')
       assert.equal(on.status, 200)
-      assert.deepEqual(Object.keys(on.body.limits as object), ['anthropic', 'chatgpt'], 'no zai')
+      assert.deepEqual(Object.keys(on.body.limits as object), ['anthropic', 'chatgpt', 'xiaomi'], 'no zai')
       assert.deepEqual(await call('GET', '/off/api/limits'), { status: 200, body: { limits: {} } })
       assert.equal((await call('POST', '/api/limits')).status, 405)
     } finally {

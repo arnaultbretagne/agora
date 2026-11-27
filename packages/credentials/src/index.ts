@@ -32,6 +32,7 @@ export {
 export {
   LIMIT_ENDPOINTS,
   LIMITS_NOT_READ,
+  LIMITS_WITHOUT_POOL,
   SubscriptionLimits,
   getThroughGateway,
   limitsHttp,
