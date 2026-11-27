@@ -1,5 +1,5 @@
 // The subscriptions' limits (docs/specs/credentials.md, "Limits"): each account's 5-hour and weekly
-// windows, as its provider's own usage endpoint gives them. Agora asks through the gateway, the way an
+// windows, or its billing period, as its provider's own usage endpoint gives them. Agora asks through the gateway, the way an
 // execution goes out, with a grant it signs for itself — the `limits` profile, bound to the server's own
 // Pod address — so it never holds a provider's credential. Read when the interface asks, at most once
 // every few minutes; a failed read keeps the windows before it, marked stale.
@@ -9,7 +9,8 @@ import type { Socket } from 'node:net'
 import { connect as tlsConnect } from 'node:tls'
 import type { GrantSigner } from './grants.ts'
 
-export type WindowKind = 'five_hour' | 'weekly'
+/** `period`: a subscription's billing period, a month or a year, as a quota of credits gives it. */
+export type WindowKind = 'five_hour' | 'weekly' | 'period'
 
 export interface LimitWindow {
   readonly kind: WindowKind
@@ -53,7 +54,7 @@ const finite = (value: unknown): number | null => (typeof value === 'number' && 
 const percent = (value: number): number => Math.min(100, Math.max(0, value))
 const instant = (ms: number | null): string | null => (ms === null || !Number.isFinite(ms) ? null : new Date(ms).toISOString())
 const hundredths = (value: number): number => Math.round(value * 100) / 100
-const ORDER: Record<WindowKind, number> = { five_hour: 0, weekly: 1 }
+const ORDER: Record<WindowKind, number> = { five_hour: 0, weekly: 1, period: 2 }
 const ordered = (windows: LimitWindow[]): LimitWindow[] => windows.sort((a, b) => ORDER[a.kind] - ORDER[b.kind])
 
 /** Each base profile's usage endpoint, by profile. The catalogue is here, in code, reviewed like code. */
@@ -93,6 +94,24 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
         return kind === null ? [] : [{ kind, usedPercent: percent(used), resetsAt: reset === null ? null : instant(reset * 1000) }]
       })
       return { windows: ordered(windows), plan: typeof answer?.plan_type === 'string' ? answer.plan_type : null }
+    },
+  },
+  // Xiaomi MiMo's Token Plan, on its European cluster, with its `tp-` key: Xiaomi's "Query Token Plan Credits"
+  // (mimo.mi.com/docs/en-US/api/asset/credits-get). One window, the billing period: the credits used of its total,
+  // until `period.end_at`, UTC written without a zone; none while the plan holds no credit.
+  xiaomi: {
+    host: 'token-plan-ams.xiaomimimo.com',
+    path: '/v1/platform/token_plan',
+    headers: {},
+    read(body) {
+      const answer = object(body)
+      const quota = object(answer?.quota)
+      const total = finite(quota?.total_credits),
+        used = finite(quota?.used_credits),
+        end = object(answer?.period)?.end_at
+      if (answer?.object !== 'token_plan' || total === null || used === null || total <= 0) return { windows: [], plan: null }
+      const resetsAt = typeof end === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(end) ? instant(Date.parse(`${end.replace(' ', 'T')}Z`)) : null
+      return { windows: [{ kind: 'period', usedPercent: percent((used / total) * 100), resetsAt }], plan: typeof answer.plan_code === 'string' ? answer.plan_code : null }
     },
   },
   // z.ai's Coding Plan: its token (or credit) limits, the 5-hour one with unit 3, the weekly one with
@@ -229,7 +248,7 @@ export interface SubscriptionLimitsOptions {
   readonly signer: GrantSigner
   /** The server's own Pod address, which its grant is bound to. */
   readonly address: string
-  /** The profiles to read: the base profiles of the catalogue's pools. Those without an endpoint are left out. */
+  /** The profiles to read: the base profiles of the catalogue's pools, beside `LIMITS_WITHOUT_POOL`. Those without an endpoint are left out. */
   readonly profiles: () => Promise<readonly string[]>
   /** How long a read stands before the next one; 5 minutes. */
   readonly maxAgeMs?: number
@@ -247,6 +266,12 @@ export interface SubscriptionLimitsOptions {
  */
 export const LIMITS_NOT_READ: ReadonlySet<string> = new Set(['zai'])
 
+/**
+ * The accounts read though no pool of the catalogue draws from them (docs/specs/credentials.md, "Limits"): `xiaomi`,
+ * the operator's Xiaomi MiMo subscription, which no harness uses.
+ */
+export const LIMITS_WITHOUT_POOL: readonly string[] = ['xiaomi']
+
 /** The accounts' limits, read through the gateway at most once per `maxAgeMs`, one read at a time. */
 export class SubscriptionLimits {
   private readonly options: SubscriptionLimitsOptions
@@ -263,7 +288,7 @@ export class SubscriptionLimits {
   }
 
   async read(): Promise<Record<string, AccountLimits>> {
-    const profiles = [...new Set(await this.options.profiles())].filter((p) => Object.hasOwn(LIMIT_ENDPOINTS, p) && !LIMITS_NOT_READ.has(p)).sort()
+    const profiles = [...new Set([...(await this.options.profiles()), ...LIMITS_WITHOUT_POOL])].filter((p) => Object.hasOwn(LIMIT_ENDPOINTS, p) && !LIMITS_NOT_READ.has(p)).sort()
     const due = this.now() - this.readAt >= (this.options.maxAgeMs ?? 300_000) || profiles.some((p) => !this.last.has(p))
     if (due && profiles.length > 0) {
       this.reading ??= this.refresh(profiles).finally(() => {

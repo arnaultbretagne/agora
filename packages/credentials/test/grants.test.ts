@@ -308,6 +308,39 @@ describe('profiles', () => {
     for (const profile of ['preview', 'previews:read', 'previews:pr-42-rss']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
   })
 
+  it('C86 limits opens of Xiaomi MiMo one GET on the Token Plan\'s credits, exactly; nothing else on its host', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grants-xiaomi-'))
+    writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+    const signer = new GrantSigner({ proxy: 'gateway.test:3000', keyFile: join(dir, 'key.pem'), keyId: 'test', issuer: 'agora', audience: 'agora-gateway' })
+    const { token } = await signer.mint({ label: 'limits', ttlSeconds: 300, profiles: ['limits'], address: '10.244.0.9' })
+    const grants = (JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')) as { grants: Grant[] }).grants
+    const host = 'token-plan-ams.xiaomimimo.com'
+    assert.deepEqual(grants.filter((g) => g.host.endsWith('xiaomimimo.com')), [{ host, path: '^/v1/platform/token_plan$', methods: ['GET'] }])
+    const cases: [string, string, string, boolean][] = [
+      [host, 'GET', '/v1/platform/token_plan', true],
+      // The same path with another method, a query or a suffix; inference and the other platform paths.
+      [host, 'POST', '/v1/platform/token_plan', false],
+      [host, 'DELETE', '/v1/platform/token_plan', false],
+      [host, 'GET', '/v1/platform/token_plan?x=1', false],
+      [host, 'GET', '/v1/platform/token_plan/usage', false],
+      [host, 'GET', '/v1/platform/token_planX', false],
+      [host, 'GET', '/v1/models', false],
+      [host, 'POST', '/v1/chat/completions', false],
+      [host, 'POST', '/anthropic/v1/messages', false],
+      // Xiaomi's other regions and hosts.
+      ['token-plan-cn.xiaomimimo.com', 'GET', '/v1/platform/token_plan', false],
+      ['token-plan-sgp.xiaomimimo.com', 'GET', '/v1/platform/token_plan', false],
+      ['api.xiaomimimo.com', 'GET', '/v1/platform/token_plan', false],
+      ['platform.xiaomimimo.com', 'GET', '/api/v1/balance', false],
+    ]
+    for (const [h, method, path, expected] of cases) assert.equal(allowed(grants, h, method, path), expected, `${method} ${h}${path}`)
+    assert.equal(allowedOnline(grants, 'GET', '/v1/platform/token_plan'), false, 'no grant on the Internet')
+    // Never an execution's: no base profile, nor `limits`, opens it.
+    assert.equal(BASE_PROFILES.has('xiaomi'), false)
+    assert.throws(() => compileProfile('xiaomi'), ProfileRefused)
+    assert.throws(() => compileProfile('limits'), ProfileRefused)
+  })
+
   it('C41 vault:read and vault:write open the vault’s MCP endpoint on vault.bretagne.dev and nothing else; neither is a base profile', () => {
     for (const profile of ['vault:read', 'vault:write']) {
       const grants = compileProfile(profile)

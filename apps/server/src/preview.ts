@@ -335,11 +335,11 @@ const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 
 /**
- * What a preview's `GET /api/limits` answers (docs/specs/preview.md, "The limits"): four invented subscriptions, read
+ * What a preview's `GET /api/limits` answers (docs/specs/preview.md, "The limits"): five invented subscriptions, read
  * now, in the order the server gives them — Claude, no plan; Gemini, no plan; ChatGPT, `pro`, its week nearly spent;
- * z.ai, `lite`, its last read failed 40 minutes after the one its windows stand from. Each window starts again as long
- * after the request as the last time it was asked. Those production does not read (`LIMITS_NOT_READ`) are left out, as
- * there: z.ai, for now.
+ * Xiaomi MiMo, `lite`, its billing period alone; z.ai, `lite`, its last read failed 40 minutes after the one its windows
+ * stand from. Each window starts again as long after the request as the last time it was asked. Those production does
+ * not read (`LIMITS_NOT_READ`) are left out, as there: z.ai, for now.
  */
 export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLimits, 'read'> {
   return {
@@ -373,6 +373,13 @@ export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLi
             { kind: 'weekly', usedPercent: 88, resetsAt: at(1 * DAY + 6 * HOUR) },
           ],
           plan: 'pro',
+          checkedAt: at(0),
+          stale: false,
+          error: null,
+        },
+        xiaomi: {
+          windows: [{ kind: 'period', usedPercent: 34, resetsAt: at(14 * DAY + 3 * HOUR) }],
+          plan: 'lite',
           checkedAt: at(0),
           stale: false,
           error: null,
