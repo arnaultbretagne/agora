@@ -157,6 +157,37 @@ describe('each provider', () => {
     assert.deepEqual(LIMIT_ENDPOINTS.antigravity!.read(disabled).windows, [], 'a disabled bucket, and one without its fraction: no window')
   })
 
+  it('C88 Gemini, in the other shapes Google\'s answer is read in: wrapped, the deprecated buckets, the window named otherwise, the oneof written by protobuf-es', () => {
+    const gemini = (buckets: unknown[]) => ({ groups: [{ displayName: 'Gemini Models', buckets }] })
+    const read = (body: unknown) => LIMIT_ENDPOINTS.antigravity!.read(body).windows
+    const spent = [
+      { kind: 'five_hour', usedPercent: 75, resetsAt: '2026-10-20T13:02:07.000Z' },
+      { kind: 'weekly', usedPercent: 0.76, resetsAt: '2026-10-25T04:15:26.000Z' },
+    ]
+    // In `response` or `summary`, as CodexBar's and token-monitor's readers take it.
+    assert.deepEqual(read({ response: GOOGLE_SPENT }), spent)
+    assert.deepEqual(read({ summary: GOOGLE_SPENT }), spent)
+    // The deprecated top-level buckets of quota_summary.proto, Gemini's by their id.
+    assert.deepEqual(read({ buckets: [...GOOGLE_SPENT.groups[0]!.buckets, { bucketId: '3p-5h', window: '5h', remainingFraction: 0 }] }), spent)
+    // In the Gemini group, the window from `window`, else the id, else the name: other ids (CodexBar's and token-monitor's
+    // readers), none at all, names alone ("Weekly", "Five-Hour": pingdotgg/t3code #21020).
+    assert.deepEqual(read(gemini([{ bucketId: 'gemini-pro-quota', window: 'session', remainingFraction: 0.25, resetTime: '2026-10-20T13:02:07Z' }, { bucketId: 'gemini_weekly', remainingFraction: 0.5, resetTime: '2026-10-25T04:15:26Z' }])), [
+      { kind: 'five_hour', usedPercent: 75, resetsAt: '2026-10-20T13:02:07.000Z' },
+      { kind: 'weekly', usedPercent: 50, resetsAt: '2026-10-25T04:15:26.000Z' },
+    ])
+    assert.deepEqual(read(gemini([{ displayName: 'Five-Hour', remainingFraction: 0.9, resetTime: '2026-10-20T13:02:07Z' }, { displayName: 'Weekly', remainingFraction: 0.8, resetTime: '2026-10-25T04:15:26Z' }])).map((w) => [w.kind, w.usedPercent]), [['five_hour', 10], ['weekly', 20]])
+    assert.deepEqual(read(gemini([{ displayName: 'Five Hour Limit Remaining', remainingFraction: 1 }, { bucketId: 'gemini-5h limit', remainingFraction: 0.5 }])).map((w) => [w.kind, w.usedPercent]), [['five_hour', 50]], 'two buckets of one window: the more spent')
+    // The oneof as protobuf-es writes it.
+    assert.deepEqual(read(gemini([{ bucketId: 'gemini-weekly', remaining: { remainingFraction: 0.5 } }, { bucketId: 'gemini-5h', remaining: { case: 'remainingFraction', value: 0.25 } }])).map((w) => w.usedPercent), [75, 50])
+    // Not Gemini's, not a window, or no fraction: nothing.
+    for (const body of [
+      { groups: [GOOGLE_SUMMARY.groups[1], GOOGLE_SUMMARY.groups[2]] },
+      gemini([{ bucketId: 'gemini-argon-wtu-weekly', window: 'weekly', remainingFraction: 0.5 }, { bucketId: 'gemini-daily', window: 'daily', remainingFraction: 0.5 }, { bucketId: 'gemini-session-history', remainingFraction: 0.5 }]),
+      gemini([{ bucketId: 'gemini-weekly', remainingAmount: 40 }, { bucketId: 'gemini-5h', remaining: { case: 'remainingAmount', value: 0.5 } }]),
+      { groups: [{ displayName: 'All Models', buckets: [{ bucketId: 'gemini-pro', remainingFraction: 1 }] }] },
+    ]) assert.deepEqual(read(body), [], JSON.stringify(body))
+  })
+
   it('C85 Xiaomi MiMo: the billing period alone, the credits used of its total, until its end in UTC, and the plan', () => {
     assert.deepEqual(LIMIT_ENDPOINTS.xiaomi!.read(XIAOMI), { windows: [{ kind: 'period', usedPercent: 15, resetsAt: '2027-09-21T23:59:59.000Z' }], plan: 'pro' })
     // A month of a Lite plan, part spent: used over total, unrounded.
@@ -312,14 +343,14 @@ describe('the reads', () => {
 })
 
 describe('Google\'s two requests', () => {
-  const google = (assist: { status: number; body: unknown }) => {
+  const google = (assist: { status: number; body: unknown }, summary: unknown = GOOGLE_SUMMARY) => {
     // Google's requests alone: xiaomi, read beside it whatever the pools declare (C87), is answered and left out.
     const calls: GatewayGet[] = []
     const { limits } = limitsWith(async (input) => {
       if (input.host !== 'daily-cloudcode-pa.googleapis.com') return { status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }
       calls.push(input)
       if (input.path === '/v1internal:loadCodeAssist') return { status: assist.status, body: JSON.stringify(assist.body) }
-      return { status: 200, body: JSON.stringify(GOOGLE_SUMMARY) }
+      return { status: 200, body: JSON.stringify(summary) }
     }, ['antigravity'])
     return { limits, calls }
   }
@@ -344,12 +375,64 @@ describe('Google\'s two requests', () => {
     const none = google({ status: 200, body: { currentTier: { id: 'free-tier' } } })
     const unnamed = await none.limits.read()
     assert.deepEqual(none.calls.map((c) => c.path), ['/v1internal:loadCodeAssist'])
-    assert.deepEqual(unnamed.antigravity, { windows: [], plan: null, checkedAt: null, stale: true, error: 'loadCodeAssist named no project' })
+    assert.deepEqual(unnamed.antigravity, { windows: [], plan: null, checkedAt: null, stale: true, error: 'loadCodeAssist named no project: currentTier "free-tier", paidTier none, no project, fields {currentTier}' })
 
     const refused = google({ status: 403, body: { error: { code: 403 } } })
     const denied = await refused.limits.read()
     assert.deepEqual(refused.calls.map((c) => c.path), ['/v1internal:loadCodeAssist'])
     assert.equal(denied.antigravity!.error, 'daily-cloudcode-pa.googleapis.com answered 403 to /v1internal:loadCodeAssist')
+  })
+
+  it('C89 a summary with no Gemini window: the error names what loadCodeAssist and the summary held, never a value of the account\'s', async () => {
+    // The shared consumer project's summary, the Claude and GPT models' week alone (pingdotgg/t3code #21020), for a
+    // free tier; a bucket's name carrying an email, the project and a token, which the error withholds.
+    const assist = { currentTier: { id: 'free-tier', name: 'Antigravity' }, paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' }, cloudaicompanionProject: 'aicode-consumers', gcpManaged: false }
+    const summary = {
+      groups: [
+        {
+          displayName: 'Claude and GPT models',
+          buckets: [
+            { bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-11-30T10:00:00Z', remainingFraction: 0.5, description: 'it will fully refresh in 3 days' },
+            { bucketId: '3p-5h', displayName: 'person@example.com', window: '5h', disabled: true },
+          ],
+        },
+        { displayName: 'aicode-consumers', buckets: [{ bucketId: 'ya29.a0AfB_secret', window: 'weekly', remainingAmount: 40 }] },
+      ],
+      description: 'Within each group, models share a weekly limit and a 5-hour limit.',
+    }
+    const { limits } = google({ status: 200, body: assist }, summary)
+    const read = await limits.read()
+    assert.deepEqual([read.antigravity!.windows, read.antigravity!.stale], [[], true])
+    assert.equal(
+      read.antigravity!.error,
+      'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier "free-tier", paidTier "g1-pro-tier", Google\'s shared consumer project, fields {currentTier, paidTier, cloudaicompanionProject, gcpManaged}; ' +
+        'summary fields {groups, description}; groups "Claude and GPT models" [' +
+        '"3p-weekly" (window "weekly", remainingFraction 0.5, displayName "Weekly Limit Remaining", fields {bucketId, displayName, window, resetTime, remainingFraction, description}); ' +
+        '"3p-5h" (window "5h", remainingFraction none, disabled true, displayName withheld, fields {bucketId, displayName, window, disabled})] | ' +
+        'withheld [withheld (window "weekly", remainingFraction none, fields {bucketId, window, remainingAmount})]',
+    )
+    for (const secret of ['person@example.com', 'aicode-consumers', 'ya29', 'Google AI Pro', 'refresh in']) assert.ok(!read.antigravity!.error!.includes(secret), secret)
+
+    // The account's own project, in a bucket's id: withheld too. The placeholder a wrong OAuth client gets — All Models,
+    // one bucket per model, no window (steipete/CodexBar #4293) — named as such.
+    const own = google({ status: 200, body: { currentTier: { id: 'standard-tier' }, cloudaicompanionProject: { id: 'own-project-4821' } } }, {
+      groups: [{ displayName: 'All Models', buckets: [{ bucketId: 'gemini-pro', remainingFraction: 1 }, { bucketId: 'own-project-4821-claude', remainingFraction: 1 }] }],
+    })
+    const placeholder = (await own.limits.read()).antigravity!.error!
+    assert.equal(
+      placeholder,
+      'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier "standard-tier", paidTier none, the account\'s own project, fields {currentTier, cloudaicompanionProject}; ' +
+        'summary fields {groups}; groups "All Models" [' +
+        '"gemini-pro" (window none, remainingFraction 1, fields {bucketId, remainingFraction}); withheld (window none, remainingFraction 1, fields {bucketId, remainingFraction})]',
+    )
+    assert.ok(!placeholder.includes('own-project-4821'))
+
+    // Without a project: the tiers Google refuses the account, and why (steipete/CodexBar #4293).
+    const refused = google({ status: 200, body: { ineligibleTiers: [{ tierId: 'free-tier', reasonCode: 'GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT', reasonMessage: 'person@example.com may not' }] } })
+    assert.equal(
+      (await refused.limits.read()).antigravity!.error,
+      'loadCodeAssist named no project: currentTier none, paidTier none, no project, ineligibleTiers "free-tier" "GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT", fields {ineligibleTiers}',
+    )
   })
 })
 

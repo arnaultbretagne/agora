@@ -46,6 +46,11 @@ export interface LimitEndpoint {
   body?(prelude: unknown): string
   /** The provider's answer, read into windows; none when it holds no window this reads. */
   read(body: unknown): { windows: LimitWindow[]; plan: string | null }
+  /**
+   * What an answer that gave no window held, for the error: its fields' names and the provider's own identifiers, enough
+   * to write the reader from, never a value of the account's — no token, email or project.
+   */
+  describe?(body: unknown, prelude: unknown): string
 }
 
 const object = (value: unknown): Record<string, unknown> | null =>
@@ -56,6 +61,92 @@ const instant = (ms: number | null): string | null => (ms === null || !Number.is
 const hundredths = (value: number): number => Math.round(value * 100) / 100
 const ORDER: Record<WindowKind, number> = { five_hour: 0, weekly: 1, period: 2 }
 const ordered = (windows: LimitWindow[]): LimitWindow[] => windows.sort((a, b) => ORDER[a.kind] - ORDER[b.kind])
+
+// Google's answers (docs/specs/credentials.md, "Google's answer").
+
+/** Wrapped in `response` or `summary`, as CodexBar's and token-monitor's readers take it, or bare. */
+const googleSummary = (body: unknown): Record<string, unknown> | null => {
+  const root = object(body)
+  return object(root?.response) ?? object(root?.summary) ?? root
+}
+
+/** `loadCodeAssist`'s project: `cloudaicompanionProject`, a string or an object's `id`, bare or in `response`. */
+function googleProject(prelude: unknown): string | null {
+  const root = object(prelude)
+  for (const answer of [root, object(root?.response)]) {
+    const named = answer?.cloudaicompanionProject
+    const project = typeof named === 'string' ? named : object(named)?.id
+    if (typeof project === 'string' && project !== '') return project
+  }
+  return null
+}
+
+/** `remainingFraction`, or the oneof as protobuf-es writes it, `remaining: {remainingFraction}` or `{case, value}`. */
+function googleFraction(bucket: Record<string, unknown>): number | null {
+  const remaining = object(bucket.remaining)
+  return finite(bucket.remainingFraction) ?? finite(remaining?.remainingFraction) ?? (remaining?.case === 'remainingFraction' ? finite(remaining.value) : null)
+}
+
+const FIVE_HOURS = ['5h', 'session', '5-hour', 'five hour', 'five-hour']
+
+/** The bucket's window, from its `window`, else its `bucketId`, else its `displayName`: `5h`, `gemini-weekly`, "Five Hour Limit Remaining". */
+function googleCadence(bucket: Record<string, unknown>): WindowKind | null {
+  for (const value of [bucket.window, bucket.bucketId, bucket.displayName]) {
+    if (typeof value !== 'string') continue
+    const v = value.trim().toLowerCase().replaceAll('_', '-').replace(/ limit( remaining)?$/, '')
+    if (v === 'weekly' || /[- ]weekly$/.test(v)) return 'weekly'
+    if (FIVE_HOURS.some((a) => v === a || v.endsWith(`-${a}`) || v.endsWith(` ${a}`))) return 'five_hour'
+  }
+  return null
+}
+
+/** A field's name, as it is when it is one. */
+const fieldName = (key: string): string => (/^[A-Za-z0-9_]{1,40}$/.test(key) ? key : '?')
+const fieldNames = (value: Record<string, unknown> | null): string => (value === null ? 'none' : `{${Object.keys(value).map(fieldName).join(', ')}}`)
+
+/** One of Google's identifiers, kept short and plain; anything that could be the account's — an email, a token, its project — withheld. */
+function identifier(value: unknown, project: string | null): string | null {
+  if (typeof value !== 'string') return null
+  if (value.includes('@') || /^ya29\./.test(value) || value.length > 64 || (project !== null && value.includes(project))) return 'withheld'
+  return JSON.stringify(value.replace(/[^A-Za-z0-9 ._:+()/&-]/g, ''))
+}
+
+/** What `loadCodeAssist` said of the account: its tiers' ids, which project, the tiers it may not have and why. */
+function describeAssist(prelude: unknown): string {
+  const root = object(prelude)
+  const answer = object(root?.response) ?? root
+  const project = googleProject(prelude)
+  const tier = (t: unknown) => identifier(object(t)?.id, project) ?? 'none'
+  const which = project === null ? 'no project' : project === 'aicode-consumers' ? "Google's shared consumer project" : "the account's own project"
+  const ineligible = (Array.isArray(answer?.ineligibleTiers) ? answer.ineligibleTiers : []).map((t) => `${tier({ id: object(t)?.tierId })} ${identifier(object(t)?.reasonCode, project) ?? 'no reason'}`)
+  return `currentTier ${tier(answer?.currentTier)}, paidTier ${tier(answer?.paidTier)}, ${which}${ineligible.length === 0 ? '' : `, ineligibleTiers ${ineligible.join(', ')}`}, fields ${fieldNames(answer)}`
+}
+
+/** What the summary held: its fields, each group's name, each bucket's id, window, fraction, state and fields. */
+function describeSummary(body: unknown, project: string | null): string {
+  const root = object(body)
+  const summary = googleSummary(body)
+  const bucket = (value: unknown): string => {
+    const b = object(value)
+    if (b === null) return 'not an object'
+    const shown = [
+      `window ${identifier(b.window, project) ?? 'none'}`,
+      `remainingFraction ${String(googleFraction(b) ?? 'none')}`,
+      ...(b.disabled === undefined ? [] : [`disabled ${String(b.disabled)}`]),
+      ...(b.displayName === undefined ? [] : [`displayName ${identifier(b.displayName, project) ?? 'not a string'}`]),
+    ]
+    return `${identifier(b.bucketId, project) ?? 'no bucketId'} (${shown.join(', ')}, fields ${fieldNames(b)})`
+  }
+  const list = (value: unknown): string => (Array.isArray(value) ? `[${value.map(bucket).join('; ')}]` : 'none')
+  const groups = Array.isArray(summary?.groups) ? summary.groups.map((g) => `${identifier(object(g)?.displayName, project) ?? 'unnamed'} ${list(object(g)?.buckets)}`) : []
+  const text = [
+    `fields ${fieldNames(root)}`,
+    ...(summary === root ? [] : [`inside, fields ${fieldNames(summary)}`]),
+    ...(summary?.buckets === undefined ? [] : [`buckets ${list(summary.buckets)}`]),
+    `groups ${groups.length === 0 ? 'none' : groups.join(' | ')}`,
+  ].join('; ')
+  return text.length > 1500 ? `${text.slice(0, 1499)}…` : text
+}
 
 /** Each base profile's usage endpoint, by profile. The catalogue is here, in code, reviewed like code. */
 export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
@@ -135,11 +226,12 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
       return { windows: ordered(windows), plan: typeof data?.level === 'string' ? data.level : null }
     },
   },
-  // Google's Antigravity, for agy, on the cluster's own Google login (docs/specs/credentials.md, "Antigravity"): the quota
-  // summary agy 1.5.13 reads (its quota_summary.proto), for the account's project, which `loadCodeAssist` names — both
-  // POSTs, as Antigravity's client, which Google requires. The Gemini group's buckets: `gemini-5h` the 5-hour window,
-  // `gemini-weekly` the week, used being what `remainingFraction` leaves; a disabled bucket left out. A window untouched
-  // (`remainingFraction` 1) has no reset: Google then gives the request's time plus the window's length.
+  // Google's Antigravity, for agy, on the cluster's own Google login (docs/specs/credentials.md, "Antigravity", "Google's
+  // answer"): the quota summary agy 1.5.13 reads (its quota_summary.proto), for the account's project, which
+  // `loadCodeAssist` names — both POSTs, as Antigravity's client, which Google requires. The Gemini buckets become the
+  // 5-hour and weekly windows, used being what the remaining fraction leaves; a disabled bucket left out. A window
+  // untouched (fraction 1) has no reset: Google then gives the request's time plus the window's length. An answer with
+  // no such bucket fails naming what it held, never a value of the account's.
   antigravity: {
     host: 'daily-cloudcode-pa.googleapis.com',
     path: '/v1internal:retrieveUserQuotaSummary',
@@ -147,26 +239,40 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
     headers: { 'user-agent': 'antigravity/1.5.13 linux/amd64' },
     prelude: { path: '/v1internal:loadCodeAssist', body: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY', platform: 'LINUX_AMD64', pluginType: 'GEMINI' } }) },
     body(prelude) {
-      const named = object(prelude)?.cloudaicompanionProject
-      const project = typeof named === 'string' ? named : object(named)?.id
-      if (typeof project !== 'string' || project === '') throw new Error('loadCodeAssist named no project')
+      const project = googleProject(prelude)
+      if (project === null) throw new Error(`loadCodeAssist named no project: ${describeAssist(prelude)}`)
       return JSON.stringify({ project })
     },
     read(body) {
-      const groups = object(body)?.groups
-      const buckets = (Array.isArray(groups) ? groups : []).flatMap((g): unknown[] => {
-        const b = object(g)?.buckets
-        return Array.isArray(b) ? b : []
-      })
-      const windows = buckets.flatMap((value): LimitWindow[] => {
-        const b = object(value)
-        const kind: WindowKind | null = b?.bucketId === 'gemini-5h' ? 'five_hour' : b?.bucketId === 'gemini-weekly' ? 'weekly' : null
-        const remaining = finite(b?.remainingFraction)
-        if (kind === null || remaining === null || b?.disabled === true) return []
-        const reset = remaining >= 1 || typeof b?.resetTime !== 'string' ? null : instant(Date.parse(b.resetTime))
-        return [{ kind, usedPercent: percent(hundredths((1 - remaining) * 100)), resetsAt: reset }]
-      })
+      const summary = googleSummary(body)
+      const groups = Array.isArray(summary?.groups) ? summary.groups : []
+      // The deprecated top-level buckets (the proto's field 1), then each group's; a Gemini bucket is one whose id says
+      // so, or one in the group named Gemini, Argon's apart.
+      const candidates = [
+        ...(Array.isArray(summary?.buckets) ? summary.buckets : []).map((b) => ({ bucket: object(b), group: false })),
+        ...groups.flatMap((g) => {
+          const group = object(g)
+          const buckets = Array.isArray(group?.buckets) ? group.buckets : []
+          const gemini = typeof group?.displayName === 'string' && /^gemini( models)?$/i.test(group.displayName.trim())
+          return buckets.map((b) => ({ bucket: object(b), group: gemini }))
+        }),
+      ]
+      const least = new Map<WindowKind, { remaining: number; resetsAt: string | null }>()
+      for (const { bucket, group } of candidates) {
+        const id = typeof bucket?.bucketId === 'string' ? bucket.bucketId.toLowerCase() : ''
+        if (bucket === null || id.includes('argon') || !(group || /^gemini[-_]/.test(id))) continue
+        const kind = googleCadence(bucket)
+        const remaining = googleFraction(bucket)
+        if (kind === null || remaining === null || bucket.disabled === true) continue
+        const resetsAt = remaining >= 1 || typeof bucket.resetTime !== 'string' ? null : instant(Date.parse(bucket.resetTime))
+        const before = least.get(kind)
+        if (before === undefined || remaining < before.remaining) least.set(kind, { remaining, resetsAt })
+      }
+      const windows = [...least].map(([kind, w]): LimitWindow => ({ kind, usedPercent: percent(hundredths((1 - w.remaining) * 100)), resetsAt: w.resetsAt }))
       return { windows: ordered(windows), plan: null }
+    },
+    describe(body, prelude) {
+      return `loadCodeAssist ${describeAssist(prelude)}; summary ${describeSummary(body, googleProject(prelude))}`
     },
   },
 }
@@ -331,8 +437,9 @@ export class SubscriptionLimits {
           }
           const answer = await send(endpoint.path, endpoint.method ?? 'GET', endpoint.body?.(prelude))
           if (answer.status !== 200) throw new Error(`${endpoint.host} answered ${String(answer.status)}`)
-          const read = endpoint.read(JSON.parse(answer.body) as unknown)
-          if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window`)
+          const parsed = JSON.parse(answer.body) as unknown
+          const read = endpoint.read(parsed)
+          if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window${endpoint.describe === undefined ? '' : `: ${endpoint.describe(parsed, prelude)}`}`)
           this.last.set(profile, { ...read, checkedAt: new Date(this.now()).toISOString(), stale: false, error: null })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
