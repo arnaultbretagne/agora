@@ -340,7 +340,10 @@ test('L146 lines naming a session id never announced; an agent announcing nothin
   const orphan = JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'never-announced', update: { sessionUpdate: 'subagent_update', sessionId: 'its-child', title: 'Nobody’s' } } })
   assert.ok((await lab.write(ws, `/raw ${base64(stray, orphan)}`)).accepted)
   const turn = await lab.turn(ws, 'done', 20_000)
-  await until('its text projected', async () => textOf(await elements(lab, ws, 'agent_message_chunk')).includes('from nowhere'))
+  // Both lines projected: a run that came between their captures holds the first alone, and the next comes up to
+  // PROJECT_EVERY_MS later.
+  await projected(lab, ws)
+  assert.ok(textOf(await elements(lab, ws, 'agent_message_chunk')).includes('from nowhere'))
   assert.ok((await elements(lab, ws, 'agent_message_chunk')).every((e) => e.turn === turn.id))
   assert.ok((await elements(lab, ws, 'acp')).some((e) => JSON.stringify(e.line).includes('its-child')), 'kept as a generic element of its host')
   assert.ok((await lab.write(ws, '/sleep 1')).accepted)
