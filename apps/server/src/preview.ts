@@ -335,10 +335,11 @@ const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 
 /**
- * What a preview's `GET /api/limits` answers (docs/specs/preview.md, "The limits"): three invented subscriptions, read
- * now — Claude, no plan; ChatGPT, `pro`, its week nearly spent; z.ai, `lite`, its last read failed 40 minutes after
- * the one its windows stand from. Each window starts again as long after the request as the last time it was asked.
- * Those production does not read (`LIMITS_NOT_READ`) are left out, as there: z.ai, for now.
+ * What a preview's `GET /api/limits` answers (docs/specs/preview.md, "The limits"): four invented subscriptions, read
+ * now, in the order the server gives them — Claude, no plan; Gemini, no plan; ChatGPT, `pro`, its week nearly spent;
+ * z.ai, `lite`, its last read failed 40 minutes after the one its windows stand from. Each window starts again as long
+ * after the request as the last time it was asked. Those production does not read (`LIMITS_NOT_READ`) are left out, as
+ * there: z.ai, for now.
  */
 export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLimits, 'read'> {
   return {
@@ -350,6 +351,16 @@ export function previewLimits(now: () => number = Date.now): Pick<SubscriptionLi
           windows: [
             { kind: 'five_hour', usedPercent: 42, resetsAt: at(2 * HOUR + 10 * MINUTE) },
             { kind: 'weekly', usedPercent: 68, resetsAt: at(3 * DAY + 4 * HOUR) },
+          ],
+          plan: null,
+          checkedAt: at(0),
+          stale: false,
+          error: null,
+        },
+        antigravity: {
+          windows: [
+            { kind: 'five_hour', usedPercent: 20, resetsAt: at(3 * HOUR + 5 * MINUTE) },
+            { kind: 'weekly', usedPercent: 35, resetsAt: at(6 * DAY + 2 * HOUR) },
           ],
           plan: null,
           checkedAt: at(0),

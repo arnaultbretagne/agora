@@ -601,7 +601,7 @@ documentation, or are assumed, and the operator measures them on the cluster's l
 | What `loadCodeAssist` answers for the account: tier, project, and whether the subscription gives agy its quota | Not seen: the stand-in answered it | The first real turn (E34). |
 | agy loading the workspace's `AGENTS.md` | Not seen: in the stand-in's runs no rule reached the model's request, in a git repository or not, nor `~/.gemini/GEMINI.md` | The first real turn (E35). |
 
-Agora reads no limits for `antigravity`: `retrieveUserQuotaSummary` is agy's, its answer never seen.
+Agora reads the account's limits as agy does, `loadCodeAssist` then `retrieveUserQuotaSummary` ("Limits").
 
 ## On Agora's side
 
@@ -634,21 +634,44 @@ provider's credential.
 | `anthropic` | `GET api.anthropic.com/api/oauth/usage`, with `anthropic-beta: oauth-2025-04-20` | `five_hour` and `seven_day`, every model's week: `utilization` in percent, `resets_at`. The route `anthropic-usage` sets the cluster's Claude login; the setup-token is answered 403. |
 | `chatgpt` | `GET chatgpt.com/backend-api/wham/usage` | `rate_limit.primary_window` and `secondary_window`, told apart by `limit_window_seconds` (5 hours, 7 days): `used_percent`, `reset_at`; the plan, `plan_type`. |
 | `zai` | `GET api.z.ai/api/monitor/usage/quota/limit` | Not read, for now ("Not read"). `data.limits` of type `TOKENS_LIMIT` or `CREDIT_LIMIT`: unit 3 the 5-hour window, unit 6 the week; `percentage`, `nextResetTime`, absent until the window has started; the plan, `level`. The MCP calls' limit is left out. |
+| `antigravity` | `POST daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist`, `{"metadata": {"ideType": "ANTIGRAVITY", "platform": "LINUX_AMD64", "pluginType": "GEMINI"}}`; then `POST /v1internal:retrieveUserQuotaSummary` on the same host, `{"project": …}`, the project being the first answer's `cloudaicompanionProject` (a string, or an object's `id`). Both with `User-Agent: antigravity/1.5.13 linux/amd64`. The route `antigravity` sets the cluster's Google login. | The Gemini group's buckets (`groups[].buckets[]`): `bucketId` `gemini-5h` the 5-hour window, `gemini-weekly` the week; used is 100 × (1 − `remainingFraction`), to the hundredth; `resetTime`. A bucket `disabled`, or without `remainingFraction`, gives no window. `remainingFraction` 1, an untouched window: 0 % and no reset. No plan. The other groups — Claude and GPT models, Gemini 4 Argon — are left out. |
 
 | Element | Rule |
 | --- | --- |
-| The `limits` profile | Agora's own: a `GET` on the exact path of each endpoint above, nothing else. The catalogue does not know it: a Create or a Scope naming it is refused, `unknown_profile`. |
+| The `limits` profile | Agora's own: a `GET` on the exact path of each endpoint above, nothing else — but on `daily-cloudcode-pa.googleapis.com`, a `POST`, and nothing else, on two exact paths, `/v1internal:loadCodeAssist` and `/v1internal:retrieveUserQuotaSummary`: Google answers the quota summary to a `POST` alone, for a project only `loadCodeAssist` names. Neither changes the account; inference and agy's other calls stay out. The catalogue does not know it: a Create or a Scope naming it is refused, `unknown_profile`. |
 | The `merge` profile | Agora's own, for the merge card (`merge.md`), bound to the server's address like `limits`: on `api.github.com`, `GET` of a pull request and of its reviews, `PUT` of its merge, nothing else, as `identity` `operator` ("GitHub identities"). Unknown to the catalogue: `unknown_profile`. |
 | Which accounts | The base profiles of the catalogue's pools that have an endpoint, but those not read. |
 | Not read | `zai`: the operator's z.ai subscription has lapsed (2026-11), and its endpoint answers no window. Its endpoint stays in the code, and the `limits` grant still covers it, but it is never asked and `GET /api/limits` has no `zai`, whatever the pools declare; the opencode pool and the route `zai` are unchanged. A preview leaves it out too (`preview.md`, "The limits"). To read it again: take `zai` out of `LIMITS_NOT_READ` in `packages/credentials/src/limits.ts`, then out of this row and of C31, C34 and V12, whose tests expect it absent. |
-| When | When the interface asks, at most once every 5 minutes, one read at a time; each account on its own, 10 seconds at most. |
-| A failed read | The windows before it, kept, `stale`, with why. An account never read: no window, `stale`, why. |
+| When | When the interface asks, at most once every 5 minutes, one read at a time; each account on its own, each of its requests 10 seconds at most — Google's two, `loadCodeAssist` then the summary, one after the other, so up to 20 seconds for that account. |
+| A failed read | The windows before it, kept, `stale`, with why. An account never read: no window, `stale`, why. Google's: `loadCodeAssist` answered anything but 200 (`daily-cloudcode-pa.googleapis.com answered 403 to /v1internal:loadCodeAssist`), or named no project (`loadCodeAssist named no project`) — the summary is then not asked. |
 | A window whose reset has passed | 0 % and no reset, until the next read. |
 | `GET /api/limits` | `limits`: by base profile, its `windows` (`kind` `five_hour` or `weekly`, `usedPercent`, `resetsAt`), `plan`, `checkedAt`, `stale`, `error`. Empty when the server cannot read them. `GET` only. |
 | Configuration | `POD_IP`, the server's own address, and `GATEWAY_CA_FILE`, the gateway's root. Without `POD_IP` or the gateway, no limits. |
 
 The server reaches the gateway on port 3000, and the gateway accepts it beside the sandboxes. The
 windows are the whole account's: they count what the operator spends elsewhere too.
+
+**Google's answer.** No one here holds the Google login, so its shape comes from agy and from public clients that read
+it. agy 1.5.13 — the image's binary, its sha256 `7fa9cc6d…d4b2` — carries the descriptor of
+`google/internal/cloud/code/v1internal/quota_summary.proto`: `RetrieveUserQuotaSummaryRequest {project}`,
+`RetrieveUserQuotaSummaryResponse {buckets (deprecated), groups, description}`, `QuotaSummaryGroup {displayName, description,
+buckets}`, `QuotaSummaryBucket {bucketId, displayName, description, window, oneof remaining {remainingFraction,
+remainingAmount}, disabled, resetTime}`, `resetTime` a Timestamp — RFC 3339 in JSON. A Google AI Pro account's answer, captured
+on 2026-10-20 by token-monitor (github.com/Javis603/token-monitor, `tests/fixtures/antigravityQuotaSummaryArgon.json`), has
+three groups: Gemini Models (`gemini-weekly`, `gemini-5h`), Claude and GPT models (`3p-weekly`, `3p-5h`), Gemini 4 Argon
+(`gemini-argon-wtu-weekly`); `window` `5h` or `weekly`; untouched buckets at `remainingFraction` 1 reset at the request's
+time plus their window. A live test logged in CVERInc/clikae #159 (2026-09-27): `retrieveUserQuotaSummary` answers 403 to
+`{}` and to a User-Agent not naming Antigravity, 200 to `antigravity`; `loadCodeAssist` names `cloudaicompanionProject` when
+the request says `ideType` `ANTIGRAVITY`. With another project than the account's, the Gemini group is missing
+(pingdotgg/t3code #21020). `remainingFraction` sits in a oneof, so proto3's JSON writes it even at 0.
+
+| Mapping | Why |
+| --- | --- |
+| The Gemini group only | `antigravity` is the Google AI subscription for Gemini; the Claude and GPT models' group and Argon's are other quotas, which a single 5-hour and weekly pair cannot hold. |
+| By `bucketId`, not by name or `window` | The identifiers are the stable part; the names are prose for people. |
+| `remainingFraction` 1: no reset | Google gives an untouched window the request's time plus its length, which moves at each read: no window has started, as z.ai's `nextResetTime` absent. |
+| The daily host | agy's own (`--cloud_code_endpoint`); the production host answers Gemini's 5-hour bucket at 1, its reset moving, whatever is used (Javis603/token-monitor #722). |
+| What is not seen | No answer with the cluster's login: its tier, its project, and whether its subscription has the Gemini group, are measured on the cluster's first read. |
 
 ## What the template adds
 
@@ -703,12 +726,12 @@ call. The test page does it itself when the agent offers the option.
 | C29 | A warm token, and an execution's, for Pods whose Sandboxes record known addresses | Each token's `ip` is its Pod's address as the Sandbox records it; a signer asked for a token without a valid address refuses. |
 | C30 | A token whose `ip` is another address than the one the request comes from; one with no `ip` | 403 from the gateway, on a route with a credential and on `internet`. The same token from its own address: let through. |
 | C31 | `GET /api/limits` on the server in the cluster, its pools declaring `anthropic`, `chatgpt` and `zai` | For each but `zai`, not read, its 5-hour and weekly windows from the provider, `stale` false; no `zai`; the gateway logs a request per account read from the server, under the `limits` grant; a second request within 5 minutes reaches no provider. |
-| C32 | The grant the server signs for the limits | Bound to the server's address; a `GET` on the exact path of each usage endpoint; another path, a query, or another method of the same host: not covered. |
+| C32 | The grant the server signs for the limits | Bound to the server's address; on the exact path of each usage endpoint, its method alone — `GET`, or Google's two `POST`s; another path, a query, or another method of the same host: not covered. |
 | C33 | A Create naming `limits` | Refused, `unknown_profile`; nothing written. |
 | C34 | `GET /api/limits` twice at once, again within 5 minutes, then after; pools with base profiles with and without an endpoint, `zai` among them, as in production; a `POST`; the server without an address | One read per account with an endpoint, through the gateway with the `limits` grant, `zai` never asked nor in `limits`, its endpoint kept; nothing more within 5 minutes; read again after; 405; `limits` empty. |
 | C35 | A read failing after one that succeeded; an account never read; a window whose reset has passed | The earlier windows, `stale`, the reason; no window, `stale`, the reason; that window at 0 % with no reset. |
-| C36 | Each provider's answer, as given on 2026-10-07; an answer of another shape | Their 5-hour and weekly windows in percent with their resets, and the plan; z.ai's 5-hour without a reset, its MCP limit left out; no window. |
-| C37 | A read through a gateway, the tunnel accepted, then refused | `CONNECT` with the grant as `Proxy-Authorization`, TLS to the host, the placeholder `Authorization` and the endpoint's headers; the answer read. Refused: an error naming the status. |
+| C36 | Each provider's answer, as given on 2026-10-07, Google's as captured on 2026-10-20 ("Google's answer"); Google's with a window spent, a bucket disabled, a bucket without its fraction; an answer of another shape | Their 5-hour and weekly windows in percent with their resets, and the plan; z.ai's 5-hour without a reset, its MCP limit left out; Google's Gemini group alone, its untouched 5-hour at 0 % without a reset, its week at 0.76 % with its reset, the disabled bucket and the one without a fraction left out; no window. |
+| C37 | A read through a gateway, the tunnel accepted, then refused; a `POST` with a body | `CONNECT` with the grant as `Proxy-Authorization`, TLS to the host, the placeholder `Authorization` and the endpoint's headers; the answer read. Refused: an error naming the status. The `POST` reaches the host with its body, `content-type: application/json`. |
 | C38 | Public GitHub: `internet` alone, the mock's `/fetch` of `api.github.com/repos/A`, of `/rate_limit`, of git's refs and `git-upload-pack` on A; then a `PATCH` of A and the first request of a push; then the same read with `anthropic` alone | GitHub answers each read, the gateway logging `github-api-public` or `github-git-public`, the rate limit an installation's; the write and the push: 403 from the gateway; without `internet`: 403. |
 | C39 | `x-gateway-grant: covered` sent by the sandbox with `internet` alone: a read of a public repository, a write on an offered one | The read through `github-api-public`; the write: 403 from the gateway. |
 | C40 | A real git client with `internet` alone: `git ls-remote` and `git clone --depth 1` of a public repository, of an offered one not granted; then `git push` to it | The refs and the clones; the push refused, 403 from the gateway, no branch on GitHub. |
@@ -757,3 +780,5 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C80 | A pool declaring `anthropic`; a Create, a Scope and a `spawn_agent` naming `anthropic`, `zai`, `chatgpt` or `antigravity`, `OFFERED_PROFILES` empty, then listing other profiles; the same Create without it | Each `unknown_profile`, nothing written — no Create, no Scope, no Workstream, no approval —, no token handed; the Create without it accepted, its `baseProfiles` `anthropic`, its token naming `anthropic` and its own profiles. |
 | C81 | An execution living past its first token's life, a command left running after its turn | A new token before each one expires, with the same profiles; every deadline Agora sets at least half a token's life before the end of the token in place; the bridge holding the last. |
 | C82 | A token renewed — the same `sub` and `grants` — while a tunnel is open; then one with other grants | The tunnel opened with the previous token stays open, and closes 30 s before that token expires; later tunnels carry the new one. The other grants close the open tunnels at once. |
+| C83 | The `limits` grant on Google: the quota summary and `loadCodeAssist` with `POST`, with `GET`, `PUT`, a query, a suffix; agy's other calls, inference; Google's other hosts | Two grants on `daily-cloudcode-pa.googleapis.com`, `POST` alone, on `^/v1internal:loadCodeAssist$` and `^/v1internal:retrieveUserQuotaSummary$`; everything else not covered; no other `POST`, no grant on the Internet. |
+| C84 | Google's read: `loadCodeAssist` naming a project, as a string then as an object; naming none; answering 403 | `POST /v1internal:loadCodeAssist` with agy's metadata, then `POST /v1internal:retrieveUserQuotaSummary` with `{project}`, both as `antigravity/1.5.13 linux/amd64`, the token `agora limits`; the windows read. Without a project or with a 403: the summary not asked, no window, `stale`, why. |
