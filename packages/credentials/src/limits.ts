@@ -233,6 +233,7 @@ export interface SubscriptionLimitsOptions {
   readonly profiles: () => Promise<readonly string[]>
   /** How long a read stands before the next one; 5 minutes. */
   readonly maxAgeMs?: number
+  /** How long each request may take, 10 seconds: an account read in two requests (Google's) may take twice that. */
   readonly timeoutMs?: number
   readonly ca?: string
   readonly get?: (input: GatewayGet) => Promise<{ status: number; body: string }>
