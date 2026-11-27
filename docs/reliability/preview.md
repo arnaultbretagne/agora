@@ -21,6 +21,8 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R13 | 2026-11-21 | `1eea30a` | local | The `check` job of pull request #229 (GitHub Actions job 136895244488), all green — V6 skipped, no Docker there: Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell; on the merge of `main` with #228, #230 and #231. V10 against the preview server started in the job, behind the browser gate's headers. |
 | R14 | 2026-11-25 | `ea491b4` | local | The `check` job of the push to `feat/base-profiles-pool-only` (GitHub Actions job 139340567021), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell. The `check` job of pull request #240 on the same commit (139340698404), all green too. V10 against the preview server started in the job, behind the browser gate's headers. |
 | R15 | 2026-11-25 | `ea491b4` | local | The `try (agora-server, apps/server/Dockerfile, false)` job of the push to `feat/base-profiles-pool-only` (GitHub Actions job 139349829946), green: the image built from that commit, started as a preview alone with its database, its client driven in Playwright's Chromium headless shell against it, behind the browser gate's headers (`PREVIEW_URL`). |
+| R16 | 2026-11-27 | `db5ff2b` | local | The `check` job of the push to `feat/limits-without-zai` (GitHub Actions job 140398526642), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell. The `check` job of pull request #248 on the same commit (140398708240), all green too. V12 against the preview server started in the job, behind the browser gate's headers. |
+| R17 | 2026-11-27 | `db5ff2b` | local | The `build` job of the `preview` workflow on pull request #248 (GitHub Actions job 140398747877), green: the image built from that commit, started as a preview alone with its database, its client driven in Playwright's Chromium headless shell against it, behind the browser gate's headers. |
 
 ## Cases
 
@@ -74,6 +76,8 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V10 | — | local | R13 | proven | `proxy` null; `offered` `internet`, `zai`, `chatgpt`, `antigravity`, `github:example/app:write`, `github:example/docs:write`, `github:example/site:read`, `vault:write`, `kubernetes:read`, `agora:delegate`; the menu Internet, z.ai, ChatGPT, Antigravity, GitHub with `example/app, example/docs, example/site (read)`, vault, k8s, agora; GitHub ticked, the key "Internet, GitHub". |
 | V10 | — | local | R14 | proven | `proxy` null; `offered` `internet`, `github:example/app:write`, `github:example/docs:write`, `github:example/site:read`, `vault:write`, `kubernetes:read`, `agora:delegate`; the menu Internet, GitHub with `example/app, example/docs, example/site (read)`, vault, k8s, agora — no z.ai, ChatGPT nor Antigravity; GitHub ticked, the key "Internet, GitHub". |
 | V10 | — | local | R15 | proven | As R14, against the image. |
+| V12 | — | local | R16 | proven | `limits` `anthropic` and `chatgpt`, no `zai`: Claude no plan, 42 % and 68 %; ChatGPT `pro`, 12 % and 88 %; neither stale; each reset and read counted from the request. The gauge, opened: the sections Claude and ChatGPT, "5-hour" and "Weekly" with their percentages and resets, no z.ai. |
+| V12 | — | local | R17 | proven | As R16, against the image. |
 
 ## Not covered
 

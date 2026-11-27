@@ -31,6 +31,7 @@ export {
 } from './grants.ts'
 export {
   LIMIT_ENDPOINTS,
+  LIMITS_NOT_READ,
   SubscriptionLimits,
   getThroughGateway,
   limitsHttp,
