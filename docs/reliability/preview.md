@@ -27,6 +27,8 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R19 | 2026-11-27 | `8ea07fe` | local | The `check` job of pull request #249 on the merge of `main` (GitHub Actions job 140427817051): the credentials, web, server and preview tests green — V6 skipped, no Docker there —, the job red for U81 and U72 of `screen.test.ts`, which `main`'s push run at `20abc8d` fails too (U81); ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell 153.0.8010.12. |
 | R20 | 2026-11-27 | `710cd52` | local | The `check` job of pull request #250 (GitHub Actions job 140441625178), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell. V12 against the preview server started in the job, behind the browser gate's headers. |
 | R21 | 2026-11-27 | `710cd52` | local | The `build` job of the `preview` workflow on pull request #250 (GitHub Actions job 140441680014), green: the image built from that commit, started as a preview alone with its database, its client driven in Playwright's Chromium headless shell against it, behind the browser gate's headers. |
+| R22 | 2026-11-27 | `27446ae` | local | The `check` job of pull request #250 on the merge of `main` with #249 (GitHub Actions job 140486956878), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell. V12 against the preview server started in the job, behind the browser gate's headers. |
+| R23 | 2026-11-27 | `27446ae` | local | The `build` job of the `preview` workflow on pull request #250 (GitHub Actions job 140486957074), green: the image built from that commit, started as a preview alone with its database, its client driven in Playwright's Chromium headless shell against it, behind the browser gate's headers. |
 
 ## Cases
 
@@ -86,6 +88,8 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V12 | — | local | R19 | proven | `limits` `anthropic`, `antigravity` and `chatgpt`, no `zai`: their plans, `stale` and errors as "The limits" says, each read and reset counted from the request; antigravity 20 % and 35 %. The gauge opened: Claude, Gemini ("5-hour 20% · resets in 3h 5m", "Weekly 35% · resets in 6d 2h"), ChatGPT `pro`; no z.ai. |
 | V12 | — | local | R20 | proven | `limits` `anthropic`, `chatgpt` and `xiaomi`, no `zai`: Claude no plan, 42 % and 68 %; ChatGPT `pro`, 12 % and 88 %; Xiaomi MiMo `lite`, `period` 34 %; none stale; each reset and read counted from the request. The gauge, opened: Claude, ChatGPT, then Xiaomi MiMo "lite", "Billing period 34% · resets in 14d 3h"; no z.ai. |
 | V12 | — | local | R21 | proven | As R20, against the image. |
+| V12 | — | local | R22 | proven | `limits` `anthropic`, `antigravity`, `chatgpt` and `xiaomi`, no `zai`: their plans, `stale` and errors as "The limits" says, each read and reset counted from the request. The gauge opened: Claude, Gemini, ChatGPT `pro`, then Xiaomi MiMo "lite", "Billing period 34% · resets in 14d 3h"; no z.ai. |
+| V12 | — | local | R23 | proven | As R22, against the image. |
 
 ## Not covered
 

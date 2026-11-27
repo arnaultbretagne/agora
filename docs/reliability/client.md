@@ -59,6 +59,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R51 | 2026-11-26 | `1dc9309` | unit | `npm test` of `@agora/web`, 52 tests, all green: Node 24.22.3. The `check` job of pull request #243 on the same commit (GitHub Actions job 139842350812), all green. |
 | R52 | 2026-11-27 | `da92b08` | unit | The `check` job of pull request #249 (GitHub Actions job 140399025920), all green: ubuntu-26.04, Node 24.22.3. |
 | R53 | 2026-11-27 | `710cd52` | unit | The `check` job of pull request #250 (GitHub Actions job 140441625178), all green: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell. The `check` job of the push on the same commit (140441332114), all green too. |
+| R54 | 2026-11-27 | `27446ae` | unit | The `check` job of pull request #250 on the merge of `main` with #249 (GitHub Actions job 140486956878), all green: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell. |
 
 ## Cases
 
@@ -283,6 +284,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U121 | — | unit | R51 | proven | Every cause's words after "The sandbox has ended: ", `not_obtained` "it was never obtained" and `unobserved` "its claim was gone before Agora could see why" among them, `lease_expired` in its three turns, `pod_gone` with and without its reason; the three losses `adapter_exited`; "The sandbox has ended." with no cause and with an unknown one. |
 | U42 | — | unit | R52 | proven | As R15; `antigravity` named Gemini, in order between Claude and ChatGPT. |
 | U42 | — | unit | R53 | proven | As R15; `xiaomi` named Xiaomi MiMo, its billing period alone shown; the fullest window a billing period's, 91; "5-hour", "Weekly", "Billing period". |
+| U42 | — | unit | R54 | proven | As R53, beside `antigravity` named Gemini. |
 
 ## Not covered
 
