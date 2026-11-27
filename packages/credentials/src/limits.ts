@@ -100,16 +100,36 @@ function googleCadence(bucket: Record<string, unknown>): WindowKind | null {
   return null
 }
 
-/** A field's name, as it is when it is one. */
-const fieldName = (key: string): string => (/^[A-Za-z0-9_]{1,40}$/.test(key) ? key : '?')
-const fieldNames = (value: Record<string, unknown> | null): string => (value === null ? 'none' : `{${Object.keys(value).map(fieldName).join(', ')}}`)
+/** Letters and digits alone, lowercased: what a value is once its separators are dropped. */
+const compact = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '')
 
-/** One of Google's identifiers, kept short and plain; anything that could be the account's — an email, a token, its project — withheld. */
+/**
+ * A value of Google's answer as the error may show it, or null: plain text — letters, digits, spaces and `._:+()/&-`
+ * alone, as it is, 64 characters at most —, no run of 20 letters or digits (for a field's name, camel-cased, none of
+ * 20 holding a digit, nor of 32), no credential's mark anywhere (`ya29`, `GOCSPX`, `eyJ`, `AIza`, `1//`), and not
+ * holding the project, once both are compacted. Anything else could be the account's: an email, a token, its project.
+ */
+function plain(value: string, project: string | null, name = false): string | null {
+  if (!/^[A-Za-z0-9 ._:+()/&-]{1,64}$/.test(value)) return null
+  const long = (run: string) => (name ? run.length >= 32 || (run.length >= 20 && /\d/.test(run)) : run.length >= 20)
+  if (value.split(/[^A-Za-z0-9]/).some(long)) return null
+  if (/ya29|gocspx/i.test(value) || /eyJ|AIza|1\/\//.test(value)) return null
+  const own = project === null ? '' : compact(project)
+  return own !== '' && compact(value).includes(own) ? null : value
+}
+
+/** A field's name, under the same rule, and a name's own shape. */
+const fieldName = (key: string, project: string | null): string => (/^[A-Za-z0-9_]{1,40}$/.test(key) ? (plain(key, project, true) ?? 'withheld') : 'withheld')
+const fieldNames = (value: Record<string, unknown> | null, project: string | null): string => (value === null ? 'none' : `{${Object.keys(value).map((k) => fieldName(k, project)).join(', ')}}`)
+
+/** One of Google's identifiers, quoted when it is plain, `withheld` otherwise; null for no string. */
 function identifier(value: unknown, project: string | null): string | null {
   if (typeof value !== 'string') return null
-  if (value.includes('@') || /^ya29\./.test(value) || value.length > 64 || (project !== null && value.includes(project))) return 'withheld'
-  return JSON.stringify(value.replace(/[^A-Za-z0-9 ._:+()/&-]/g, ''))
+  const shown = plain(value, project)
+  return shown === null ? 'withheld' : `"${shown}"`
 }
+
+const capped = (text: string, length: number): string => (text.length > length ? `${text.slice(0, length - 1)}…` : text)
 
 /** What `loadCodeAssist` said of the account: its tiers' ids, which project, the tiers it may not have and why. */
 function describeAssist(prelude: unknown): string {
@@ -119,7 +139,7 @@ function describeAssist(prelude: unknown): string {
   const tier = (t: unknown) => identifier(object(t)?.id, project) ?? 'none'
   const which = project === null ? 'no project' : project === 'aicode-consumers' ? "Google's shared consumer project" : "the account's own project"
   const ineligible = (Array.isArray(answer?.ineligibleTiers) ? answer.ineligibleTiers : []).map((t) => `${tier({ id: object(t)?.tierId })} ${identifier(object(t)?.reasonCode, project) ?? 'no reason'}`)
-  return `currentTier ${tier(answer?.currentTier)}, paidTier ${tier(answer?.paidTier)}, ${which}${ineligible.length === 0 ? '' : `, ineligibleTiers ${ineligible.join(', ')}`}, fields ${fieldNames(answer)}`
+  return capped(`currentTier ${tier(answer?.currentTier)}, paidTier ${tier(answer?.paidTier)}, ${which}${ineligible.length === 0 ? '' : `, ineligibleTiers ${ineligible.join(', ')}`}, fields ${fieldNames(answer, project)}`, 500)
 }
 
 /** What the summary held: its fields, each group's name, each bucket's id, window, fraction, state and fields. */
@@ -132,20 +152,20 @@ function describeSummary(body: unknown, project: string | null): string {
     const shown = [
       `window ${identifier(b.window, project) ?? 'none'}`,
       `remainingFraction ${String(googleFraction(b) ?? 'none')}`,
-      ...(b.disabled === undefined ? [] : [`disabled ${String(b.disabled)}`]),
+      ...(b.disabled === undefined ? [] : [`disabled ${typeof b.disabled === 'boolean' ? String(b.disabled) : 'not a boolean'}`]),
       ...(b.displayName === undefined ? [] : [`displayName ${identifier(b.displayName, project) ?? 'not a string'}`]),
     ]
-    return `${identifier(b.bucketId, project) ?? 'no bucketId'} (${shown.join(', ')}, fields ${fieldNames(b)})`
+    return `${identifier(b.bucketId, project) ?? 'no bucketId'} (${shown.join(', ')}, fields ${fieldNames(b, project)})`
   }
   const list = (value: unknown): string => (Array.isArray(value) ? `[${value.map(bucket).join('; ')}]` : 'none')
   const groups = Array.isArray(summary?.groups) ? summary.groups.map((g) => `${identifier(object(g)?.displayName, project) ?? 'unnamed'} ${list(object(g)?.buckets)}`) : []
   const text = [
-    `fields ${fieldNames(root)}`,
-    ...(summary === root ? [] : [`inside, fields ${fieldNames(summary)}`]),
+    `fields ${fieldNames(root, project)}`,
+    ...(summary === root ? [] : [`inside, fields ${fieldNames(summary, project)}`]),
     ...(summary?.buckets === undefined ? [] : [`buckets ${list(summary.buckets)}`]),
     `groups ${groups.length === 0 ? 'none' : groups.join(' | ')}`,
   ].join('; ')
-  return text.length > 1500 ? `${text.slice(0, 1499)}…` : text
+  return capped(text, 1500)
 }
 
 /** Each base profile's usage endpoint, by profile. The catalogue is here, in code, reviewed like code. */

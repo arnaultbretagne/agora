@@ -434,6 +434,34 @@ describe('Google\'s two requests', () => {
       'loadCodeAssist named no project: currentTier none, paidTier none, no project, ineligibleTiers "free-tier" "GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT", fields {ineligibleTiers}',
     )
   })
+  it('C89 every value and name the error shows, under one rule: an email, a token, the project, in any field, hidden in any way, withheld', async () => {
+    const project = 'own-project-4821'
+    const email = 'person@example.com'
+    const token = 'ya29.a0AfB_secret'
+    const hostile = {
+      ownproject4821: true,
+      [email]: 1,
+      groups: [
+        { displayName: 'own\u200bproject4821', buckets: [{ bucketId: `quota ${token}`, window: 'own project 4821', disabled: email, displayName: 'OWN_PROJECT_4821' }] },
+        { displayName: 'Claude and GPT models', buckets: [{ bucketId: 'gemini-5h', window: '5h', disabled: [project], remainingFraction: 'x', [`a${token}`]: 1, 'person%40example.com': 2 }] },
+        { displayName: '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', buckets: [{ bucketId: 'x eyJhbGciOiJFZERTQSJ9 y', window: 'AIzaSyD', displayName: '1//0gRefresh' }, { bucketId: 'a8f3k29d0s7g6h5j4k3l2', displayName: `${'x'.repeat(65)}` }] },
+      ],
+    }
+    const { limits } = google({ status: 200, body: { currentTier: { id: email }, paidTier: { id: token }, cloudaicompanionProject: project, [project]: 1, ineligibleTiers: [{ tierId: project, reasonCode: `${token} ${email}` }] } }, hostile)
+    const error = (await limits.read()).antigravity!.error!
+    assert.equal(
+      error,
+      'daily-cloudcode-pa.googleapis.com gave no window: loadCodeAssist currentTier withheld, paidTier withheld, the account\'s own project, ineligibleTiers withheld withheld, fields {currentTier, paidTier, cloudaicompanionProject, withheld, ineligibleTiers}; ' +
+        'summary fields {withheld, withheld, groups}; groups withheld [withheld (window withheld, remainingFraction none, disabled not a boolean, displayName withheld, fields {bucketId, window, disabled, displayName})] | ' +
+        '"Claude and GPT models" ["gemini-5h" (window "5h", remainingFraction none, disabled not a boolean, fields {bucketId, window, disabled, remainingFraction, withheld, withheld})] | ' +
+        'withheld [withheld (window withheld, remainingFraction none, displayName withheld, fields {bucketId, window, displayName}); withheld (window none, remainingFraction none, displayName withheld, fields {bucketId, displayName})]',
+    )
+    const flat = error.toLowerCase().replace(/[^a-z0-9]/g, '')
+    for (const secret of [project, email, token, 'GOCSPX', 'eyJ', 'AIza', '1//', 'a8f3k29d0s7g6h5j4k3l2']) {
+      assert.ok(!error.includes(secret), secret)
+      assert.ok(!flat.includes(secret.toLowerCase().replace(/[^a-z0-9]/g, '')), `${secret}, compacted`)
+    }
+  })
 })
 
 describe('GET /api/limits', () => {
