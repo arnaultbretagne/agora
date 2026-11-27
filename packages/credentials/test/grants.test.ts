@@ -237,6 +237,39 @@ describe('profiles', () => {
     assert.equal(grants.every((g) => g.tools === undefined && g.identity === undefined && g.hostPattern === undefined), true)
   })
 
+  it('C83 limits opens of Google two POSTs on Cloud Code, the quota summary and loadCodeAssist, exactly; nothing else', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grants-limits-'))
+    writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+    const signer = new GrantSigner({ proxy: 'gateway.test:3000', keyFile: join(dir, 'key.pem'), keyId: 'test', issuer: 'agora', audience: 'agora-gateway' })
+    const { token } = await signer.mint({ label: 'limits', ttlSeconds: 300, profiles: ['limits'], address: '10.244.0.9' })
+    const grants = (JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')) as { grants: Grant[] }).grants
+    const google = grants.filter((g) => g.host.endsWith('.googleapis.com'))
+    assert.deepEqual(google, [
+      { host: ANTIGRAVITY_HOST, path: '^/v1internal:loadCodeAssist$', methods: ['POST'] },
+      { host: ANTIGRAVITY_HOST, path: '^/v1internal:retrieveUserQuotaSummary$', methods: ['POST'] },
+    ])
+    const cases: [string, string, string, boolean][] = [
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummary', true],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:loadCodeAssist', true],
+      // The same paths with another method, a query or a suffix; agy's other calls; inference.
+      [ANTIGRAVITY_HOST, 'GET', '/v1internal:retrieveUserQuotaSummary', false],
+      [ANTIGRAVITY_HOST, 'PUT', '/v1internal:loadCodeAssist', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummary?alt=json', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummaryX', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuota', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:fetchAvailableModels', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:onboardUser', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:streamGenerateContent?alt=sse', false],
+      // Google's other hosts.
+      ['cloudcode-pa.googleapis.com', 'POST', '/v1internal:retrieveUserQuotaSummary', false],
+      ['www.googleapis.com', 'GET', '/oauth2/v2/userinfo', false],
+      ['oauth2.googleapis.com', 'POST', '/token', false],
+    ]
+    for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+    assert.equal(grants.filter((g) => g.methods?.includes('POST')).every((g) => g.host === ANTIGRAVITY_HOST), true, 'no other POST')
+    assert.equal(allowedOnline(grants, 'POST', '/v1internal:loadCodeAssist'), false, 'no grant on the Internet')
+  })
+
   it('C55 previews opens the hosts pr-<n>-<app>.preview.bretagne.dev and nothing else; it is not a base profile', () => {
     const grants = compileProfile('previews')
     const cases: [string, boolean][] = [

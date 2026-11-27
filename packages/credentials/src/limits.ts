@@ -33,7 +33,16 @@ export interface AccountLimits {
 export interface LimitEndpoint {
   readonly host: string
   readonly path: string
+  /** `GET` when absent. */
+  readonly method?: 'GET' | 'POST'
   readonly headers: Readonly<Record<string, string>>
+  /**
+   * A first request on the same host, a `POST` of this JSON body with the same headers, whose answer `body` reads:
+   * Google's quota is read for the account's project, which only that answer names.
+   */
+  readonly prelude?: { readonly path: string; readonly body: string }
+  /** The request's JSON body, from the prelude's answer when there is one; throws when that answer lacks what it needs. */
+  body?(prelude: unknown): string
   /** The provider's answer, read into windows; none when it holds no window this reads. */
   read(body: unknown): { windows: LimitWindow[]; plan: string | null }
 }
@@ -43,6 +52,7 @@ const object = (value: unknown): Record<string, unknown> | null =>
 const finite = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
 const percent = (value: number): number => Math.min(100, Math.max(0, value))
 const instant = (ms: number | null): string | null => (ms === null || !Number.isFinite(ms) ? null : new Date(ms).toISOString())
+const hundredths = (value: number): number => Math.round(value * 100) / 100
 const ORDER: Record<WindowKind, number> = { five_hour: 0, weekly: 1 }
 const ordered = (windows: LimitWindow[]): LimitWindow[] => windows.sort((a, b) => ORDER[a.kind] - ORDER[b.kind])
 
@@ -106,6 +116,40 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
       return { windows: ordered(windows), plan: typeof data?.level === 'string' ? data.level : null }
     },
   },
+  // Google's Antigravity, for agy, on the cluster's own Google login (docs/specs/credentials.md, "Antigravity"): the quota
+  // summary agy 1.5.13 reads (its quota_summary.proto), for the account's project, which `loadCodeAssist` names — both
+  // POSTs, as Antigravity's client, which Google requires. The Gemini group's buckets: `gemini-5h` the 5-hour window,
+  // `gemini-weekly` the week, used being what `remainingFraction` leaves; a disabled bucket left out. A window untouched
+  // (`remainingFraction` 1) has no reset: Google then gives the request's time plus the window's length.
+  antigravity: {
+    host: 'daily-cloudcode-pa.googleapis.com',
+    path: '/v1internal:retrieveUserQuotaSummary',
+    method: 'POST',
+    headers: { 'user-agent': 'antigravity/1.5.13 linux/amd64' },
+    prelude: { path: '/v1internal:loadCodeAssist', body: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY', platform: 'LINUX_AMD64', pluginType: 'GEMINI' } }) },
+    body(prelude) {
+      const named = object(prelude)?.cloudaicompanionProject
+      const project = typeof named === 'string' ? named : object(named)?.id
+      if (typeof project !== 'string' || project === '') throw new Error('loadCodeAssist named no project')
+      return JSON.stringify({ project })
+    },
+    read(body) {
+      const groups = object(body)?.groups
+      const buckets = (Array.isArray(groups) ? groups : []).flatMap((g): unknown[] => {
+        const b = object(g)?.buckets
+        return Array.isArray(b) ? b : []
+      })
+      const windows = buckets.flatMap((value): LimitWindow[] => {
+        const b = object(value)
+        const kind: WindowKind | null = b?.bucketId === 'gemini-5h' ? 'five_hour' : b?.bucketId === 'gemini-weekly' ? 'weekly' : null
+        const remaining = finite(b?.remainingFraction)
+        if (kind === null || remaining === null || b?.disabled === true) return []
+        const reset = remaining >= 1 || typeof b?.resetTime !== 'string' ? null : instant(Date.parse(b.resetTime))
+        return [{ kind, usedPercent: percent(hundredths((1 - remaining) * 100)), resetsAt: reset }]
+      })
+      return { windows: ordered(windows), plan: null }
+    },
+  },
 }
 
 export interface GatewayGet {
@@ -127,7 +171,7 @@ export interface GatewayGet {
 const MAX_ANSWER = 1024 * 1024
 
 /**
- * A GET through the gateway, as an execution goes out: CONNECT with the grant, then TLS to the host,
+ * A GET, or a POST with its JSON body, through the gateway, as an execution goes out: CONNECT with the grant, then TLS to the host,
  * which the gateway terminates to check the grant and set the account's credential. The placeholder
  * Authorization is replaced there.
  */
@@ -243,7 +287,16 @@ export class SubscriptionLimits {
         const before = this.last.get(profile)
         try {
           if (credentials === null) throw new Error(`no grant: ${String(refused)}`)
-          const answer = await get({ proxy: credentials.proxy, token: credentials.token, host: endpoint.host, path: endpoint.path, headers: endpoint.headers, timeoutMs: this.options.timeoutMs ?? 10_000, ...(this.options.ca === undefined ? {} : { ca: this.options.ca }) })
+          const grant = credentials
+          const send = (path: string, method: string, body: string | undefined) =>
+            get({ proxy: grant.proxy, token: grant.token, host: endpoint.host, path, headers: endpoint.headers, timeoutMs: this.options.timeoutMs ?? 10_000, ...(this.options.ca === undefined ? {} : { ca: this.options.ca }), ...(method === 'GET' ? {} : { method }), ...(body === undefined ? {} : { body }) })
+          let prelude: unknown = null
+          if (endpoint.prelude !== undefined) {
+            const first = await send(endpoint.prelude.path, 'POST', endpoint.prelude.body)
+            if (first.status !== 200) throw new Error(`${endpoint.host} answered ${String(first.status)} to ${endpoint.prelude.path}`)
+            prelude = JSON.parse(first.body) as unknown
+          }
+          const answer = await send(endpoint.path, endpoint.method ?? 'GET', endpoint.body?.(prelude))
           if (answer.status !== 200) throw new Error(`${endpoint.host} answered ${String(answer.status)}`)
           const read = endpoint.read(JSON.parse(answer.body) as unknown)
           if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window`)

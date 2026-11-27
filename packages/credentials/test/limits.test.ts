@@ -1,5 +1,6 @@
-// The accounts' limits (docs/specs/credentials.md, "Limits", C32 and C34–C37): each provider's answer read
-// into windows, the grant Agora gives itself, the reads it keeps, and a real GET through a stand-in gateway.
+// The accounts' limits (docs/specs/credentials.md, "Limits", C32, C34–C37 and C84): each provider's answer read
+// into windows, the grant Agora gives itself, the reads it keeps, Google's two requests, and a real GET and POST through a
+// stand-in gateway.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
@@ -39,6 +40,51 @@ const ANSWERS: Record<string, unknown> = {
       ],
     },
   },
+}
+
+/**
+ * Google's quota summary (`POST daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`), as a Google AI
+ * Pro account's was captured on 2026-10-20, sanitized, by token-monitor (github.com/Javis603/token-monitor, commit
+ * 6d13b00, tests/fixtures/antigravityQuotaSummaryArgon.json, `daily`): the fields of agy 1.5.13's quota_summary.proto.
+ * Its 5-hour buckets, untouched, reset 5 hours after the capture, its untouched weeks 7 days after: Google's way of
+ * saying no window has started.
+ */
+const GOOGLE_SUMMARY = {
+  groups: [
+    {
+      buckets: [
+        { bucketId: 'gemini-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-10-25T04:15:26Z', description: 'You have used some of your weekly limit, it will fully refresh in 4 days, 16 hours.', remainingFraction: 0.99242824 },
+        { bucketId: 'gemini-5h', displayName: 'Five Hour Limit Remaining', window: '5h', resetTime: '2026-10-20T16:40:42Z', remainingFraction: 1 },
+      ],
+      displayName: 'Gemini Models',
+      description: 'Models within this group: Gemini Flash, Gemini Pro',
+    },
+    {
+      buckets: [
+        { bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-10-27T11:40:42Z', remainingFraction: 1 },
+        { bucketId: '3p-5h', displayName: 'Five Hour Limit Remaining', window: '5h', resetTime: '2026-10-20T16:40:42Z', remainingFraction: 1 },
+      ],
+      displayName: 'Claude and GPT models',
+      description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+    },
+    {
+      buckets: [{ bucketId: 'gemini-argon-wtu-weekly', displayName: 'Gemini 4 Argon Weekly Limit', window: 'weekly', resetTime: '2026-10-27T11:40:42Z', remainingFraction: 1 }],
+      displayName: 'Gemini 4 Argon',
+      description: 'For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans.',
+    },
+  ],
+  description: 'Within each group, models share a weekly limit and a 5-hour limit. Quota is consumed proportionally to the cost of the tokens.',
+}
+
+/** What `loadCodeAssist` answers that the quota needs: the account's project (CVERInc/clikae #159, measured 2026-09-27). */
+const GOOGLE_ASSIST = { currentTier: { id: 'free-tier' }, cloudaicompanionProject: 'example-project-12345' }
+
+/** The same summary with the Gemini 5-hour window three quarters spent, and the week's 5-hour bucket of the other group disabled. */
+const GOOGLE_SPENT = {
+  groups: [
+    { displayName: 'Gemini Models', buckets: [{ ...GOOGLE_SUMMARY.groups[0]!.buckets[0]! }, { bucketId: 'gemini-5h', window: '5h', resetTime: '2026-10-20T13:02:07Z', remainingFraction: 0.25 }] },
+    { displayName: 'Claude and GPT models', buckets: [{ bucketId: '3p-5h', window: '5h', disabled: true, remainingFraction: 0, resetTime: '2026-10-20T13:02:07Z' }] },
+  ],
 }
 
 function signer(): GrantSigner {
@@ -81,23 +127,49 @@ describe('each provider', () => {
     })
   })
 
+  it('C36 Gemini: the Gemini group\'s 5-hour and weekly buckets, what remainingFraction leaves used; an untouched window without a reset', () => {
+    assert.deepEqual(LIMIT_ENDPOINTS.antigravity!.read(GOOGLE_SUMMARY), {
+      windows: [
+        { kind: 'five_hour', usedPercent: 0, resetsAt: null },
+        { kind: 'weekly', usedPercent: 0.76, resetsAt: '2026-10-25T04:15:26.000Z' },
+      ],
+      plan: null,
+    })
+    assert.deepEqual(LIMIT_ENDPOINTS.antigravity!.read(GOOGLE_SPENT).windows, [
+      { kind: 'five_hour', usedPercent: 75, resetsAt: '2026-10-20T13:02:07.000Z' },
+      { kind: 'weekly', usedPercent: 0.76, resetsAt: '2026-10-25T04:15:26.000Z' },
+    ])
+    const disabled = { groups: [{ buckets: [{ ...GOOGLE_SPENT.groups[0]!.buckets[1]!, disabled: true }, { bucketId: 'gemini-weekly', resetTime: '2026-10-25T04:15:26Z' }] }] }
+    assert.deepEqual(LIMIT_ENDPOINTS.antigravity!.read(disabled).windows, [], 'a disabled bucket, and one without its fraction: no window')
+  })
+
   it('C36 an answer of another shape gives no window', () => {
     for (const endpoint of Object.values(LIMIT_ENDPOINTS)) assert.deepEqual(endpoint.read({ error: 'nope' }).windows, [])
   })
 })
 
 describe('the grant Agora gives itself', () => {
-  it('C32 limits: a GET on each usage endpoint, exactly, bound to the server', async () => {
+  it('C32 limits: each usage endpoint\'s exact path, with its method alone, bound to the server', async () => {
     const credentials = await signer().mint({ label: 'limits', ttlSeconds: 300, profiles: ['limits'], address: '10.244.0.9' })
     const claims = payload(credentials.token)
     assert.equal(claims.ip, '10.244.0.9')
     const grants = claims.grants as { host: string; path: string; methods: string[] }[]
-    assert.deepEqual(grants.map((g) => [g.host, g.methods]), [['api.anthropic.com', ['GET']], ['chatgpt.com', ['GET']], ['api.z.ai', ['GET']]])
+    assert.deepEqual(grants.map((g) => [g.host, g.methods]), [
+      ['api.anthropic.com', ['GET']],
+      ['chatgpt.com', ['GET']],
+      ['api.z.ai', ['GET']],
+      ['daily-cloudcode-pa.googleapis.com', ['POST']],
+      ['daily-cloudcode-pa.googleapis.com', ['POST']],
+    ])
     // The gateway's rule, replayed: host, path with the query, method.
     const allowed = (host: string, path: string, method = 'GET') => grants.some((g) => g.host === host && new RegExp(g.path).test(path) && g.methods.includes(method))
     assert.ok(allowed('api.anthropic.com', '/api/oauth/usage'))
     assert.ok(allowed('chatgpt.com', '/backend-api/wham/usage'))
     assert.ok(allowed('api.z.ai', '/api/monitor/usage/quota/limit'))
+    assert.ok(allowed('daily-cloudcode-pa.googleapis.com', '/v1internal:loadCodeAssist', 'POST'))
+    assert.ok(allowed('daily-cloudcode-pa.googleapis.com', '/v1internal:retrieveUserQuotaSummary', 'POST'))
+    assert.ok(!allowed('daily-cloudcode-pa.googleapis.com', '/v1internal:retrieveUserQuotaSummary'))
+    assert.ok(!allowed('daily-cloudcode-pa.googleapis.com', '/v1internal:streamGenerateContent?alt=sse', 'POST'))
     assert.ok(!allowed('api.anthropic.com', '/api/oauth/usage?x=1'))
     assert.ok(!allowed('api.anthropic.com', '/v1/messages'))
     assert.ok(!allowed('chatgpt.com', '/backend-api/wham/usage/other'))
@@ -177,6 +249,44 @@ describe('the reads', () => {
   })
 })
 
+describe('Google\'s two requests', () => {
+  const google = (assist: { status: number; body: unknown }) => {
+    const { limits, calls } = limitsWith(async (input) => {
+      if (input.path === '/v1internal:loadCodeAssist') return { status: assist.status, body: JSON.stringify(assist.body) }
+      return { status: 200, body: JSON.stringify(GOOGLE_SUMMARY) }
+    }, ['antigravity'])
+    return { limits, calls }
+  }
+
+  it('C84 loadCodeAssist, then the quota summary for the project it names, both POSTs as Antigravity; without a project, no summary asked', async () => {
+    const { limits, calls } = google({ status: 200, body: GOOGLE_ASSIST })
+    const read = await limits.read()
+    assert.deepEqual(
+      calls.map((c) => [c.host, c.method, c.path, c.body === undefined ? undefined : JSON.parse(c.body), c.headers['user-agent']]),
+      [
+        ['daily-cloudcode-pa.googleapis.com', 'POST', '/v1internal:loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY', platform: 'LINUX_AMD64', pluginType: 'GEMINI' } }, 'antigravity/1.5.13 linux/amd64'],
+        ['daily-cloudcode-pa.googleapis.com', 'POST', '/v1internal:retrieveUserQuotaSummary', { project: 'example-project-12345' }, 'antigravity/1.5.13 linux/amd64'],
+      ],
+    )
+    assert.equal(payload(calls[0]!.token).sub, 'agora limits')
+    assert.deepEqual([read.antigravity!.stale, read.antigravity!.error, read.antigravity!.windows.map((w) => w.usedPercent)], [false, null, [0, 0.76]])
+
+    const object = google({ status: 200, body: { cloudaicompanionProject: { id: 'project-as-object' } } })
+    await object.limits.read()
+    assert.deepEqual(object.calls.map((c) => c.body === undefined ? undefined : JSON.parse(c.body)).at(-1), { project: 'project-as-object' }, 'the project as an object')
+
+    const none = google({ status: 200, body: { currentTier: { id: 'free-tier' } } })
+    const unnamed = await none.limits.read()
+    assert.deepEqual(none.calls.map((c) => c.path), ['/v1internal:loadCodeAssist'])
+    assert.deepEqual(unnamed.antigravity, { windows: [], plan: null, checkedAt: null, stale: true, error: 'loadCodeAssist named no project' })
+
+    const refused = google({ status: 403, body: { error: { code: 403 } } })
+    const denied = await refused.limits.read()
+    assert.deepEqual(refused.calls.map((c) => c.path), ['/v1internal:loadCodeAssist'])
+    assert.equal(denied.antigravity!.error, 'daily-cloudcode-pa.googleapis.com answered 403 to /v1internal:loadCodeAssist')
+  })
+})
+
 describe('GET /api/limits', () => {
   it('C34 the limits by profile; nothing when the server cannot read them; GET only', async () => {
     const { limits } = limitsWith(async (input) => ({ status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }), ['anthropic'])
@@ -209,14 +319,19 @@ try {
 }
 
 describe('through a gateway', { skip: !openssl && 'openssl is needed to make the test certificate' }, () => {
-  it('C37 CONNECT with the grant, TLS to the host, the placeholder and the endpoint\'s headers; a refused tunnel is an error', async () => {
+  it('C37 CONNECT with the grant, TLS to the host, the placeholder and the endpoint\'s headers, a POST\'s body; a refused tunnel is an error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'limits-tls-'))
     execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '1', '-subj', '/CN=api.anthropic.com', '-addext', 'subjectAltName=DNS:api.anthropic.com', '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], { stdio: 'ignore' })
     const cert = readFileSync(join(dir, 'cert.pem'), 'utf8')
     const seen: Record<string, unknown>[] = []
     const upstream = createHttpsServer({ key: readFileSync(join(dir, 'key.pem')), cert }, (req, res) => {
-      seen.push({ path: req.url, authorization: req.headers.authorization, beta: req.headers['anthropic-beta'] })
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(ANSWERS.anthropic))
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8')
+        seen.push({ method: req.method, path: req.url, authorization: req.headers.authorization, beta: req.headers['anthropic-beta'], ...(body === '' ? {} : { type: req.headers['content-type'], body }) })
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(ANSWERS.anthropic))
+      })
     })
     await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
     const tunnels: string[] = []
@@ -241,7 +356,10 @@ describe('through a gateway', { skip: !openssl && 'openssl is needed to make the
       assert.equal(answer.status, 200)
       assert.deepEqual(JSON.parse(answer.body), ANSWERS.anthropic)
       assert.deepEqual(tunnels, ['api.anthropic.com:443 Bearer grant'])
-      assert.deepEqual(seen, [{ path: '/api/oauth/usage', authorization: 'Bearer agora-placeholder', beta: 'oauth-2025-04-20' }])
+      assert.deepEqual(seen, [{ method: 'GET', path: '/api/oauth/usage', authorization: 'Bearer agora-placeholder', beta: 'oauth-2025-04-20' }])
+      const posted = await getThroughGateway({ proxy, token: 'grant', host: endpoint.host, path: '/v1internal:retrieveUserQuotaSummary', headers: {}, timeoutMs: 5000, ca: cert, method: 'POST', body: '{"project":"p"}' })
+      assert.equal(posted.status, 200)
+      assert.deepEqual(seen[1], { method: 'POST', path: '/v1internal:retrieveUserQuotaSummary', authorization: 'Bearer agora-placeholder', beta: undefined, type: 'application/json', body: '{"project":"p"}' })
       await assert.rejects(getThroughGateway({ proxy, token: 'other', host: endpoint.host, path: endpoint.path, headers: {}, timeoutMs: 5000, ca: cert }), /refused the tunnel: 403/)
     } finally {
       for (const socket of sockets) socket.destroy()
