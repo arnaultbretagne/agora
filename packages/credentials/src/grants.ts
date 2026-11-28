@@ -155,13 +155,14 @@ export function compileProfile(profile: string): Grant[] {
 /**
  * The profiles Agora gives itself, never an execution: unknown to `compileProfile`, so a Create or a
  * Scope naming one is refused. `limits` reads each account's usage endpoint (limits.ts): its exact path with its method
- * alone — a `GET`, or Google's `POST`s, the quota summary and the `loadCodeAssist` before it.
+ * alone — a `GET`, or Google's `POST`s: the quota summary, the `loadCodeAssist` before it, the per-model quota after it.
  */
 const OWN_PROFILES: Readonly<Record<string, () => Grant[]>> = {
   limits: () =>
     Object.values(LIMIT_ENDPOINTS).flatMap((e) => [
       ...(e.prelude === undefined ? [] : [{ host: e.host, path: `^${escape(e.prelude.path)}$`, methods: ['POST'] }]),
       { host: e.host, path: `^${escape(e.path)}$`, methods: [e.method ?? 'GET'] },
+      ...(e.fallback === undefined ? [] : [{ host: e.host, path: `^${escape(e.fallback.path)}$`, methods: [e.method ?? 'GET'] }]),
     ]),
   // The merge card (docs/specs/merge.md): a pull request and its reviews read, its merge, as the operator.
   merge: () => [

@@ -37,6 +37,7 @@ export {
   getThroughGateway,
   limitsHttp,
   type AccountLimits,
+  type FallbackAnswer,
   type GatewayGet,
   type LimitEndpoint,
   type LimitWindow,
