@@ -237,7 +237,7 @@ describe('profiles', () => {
     assert.equal(grants.every((g) => g.tools === undefined && g.identity === undefined && g.hostPattern === undefined), true)
   })
 
-  it('C83 limits opens of Google two POSTs on Cloud Code, the quota summary and loadCodeAssist, exactly; nothing else', async () => {
+  it('C83 limits opens of Google three POSTs on Cloud Code, loadCodeAssist, the quota summary and the per-model quota, exactly; nothing else', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'grants-limits-'))
     writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
     const signer = new GrantSigner({ proxy: 'gateway.test:3000', keyFile: join(dir, 'key.pem'), keyId: 'test', issuer: 'agora', audience: 'agora-gateway' })
@@ -247,21 +247,28 @@ describe('profiles', () => {
     assert.deepEqual(google, [
       { host: ANTIGRAVITY_HOST, path: '^/v1internal:loadCodeAssist$', methods: ['POST'] },
       { host: ANTIGRAVITY_HOST, path: '^/v1internal:retrieveUserQuotaSummary$', methods: ['POST'] },
+      { host: ANTIGRAVITY_HOST, path: '^/v1internal:retrieveUserQuota$', methods: ['POST'] },
     ])
     const cases: [string, string, string, boolean][] = [
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummary', true],
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:loadCodeAssist', true],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuota', true],
       // The same paths with another method, a query or a suffix; agy's other calls; inference.
       [ANTIGRAVITY_HOST, 'GET', '/v1internal:retrieveUserQuotaSummary', false],
       [ANTIGRAVITY_HOST, 'PUT', '/v1internal:loadCodeAssist', false],
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummary?alt=json', false],
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummaryX', false],
-      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuota', false],
+      [ANTIGRAVITY_HOST, 'GET', '/v1internal:retrieveUserQuota', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuota?alt=json', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuota/x', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUser', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotas', false],
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:fetchAvailableModels', false],
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:onboardUser', false],
       [ANTIGRAVITY_HOST, 'POST', '/v1internal:streamGenerateContent?alt=sse', false],
       // Google's other hosts.
       ['cloudcode-pa.googleapis.com', 'POST', '/v1internal:retrieveUserQuotaSummary', false],
+      ['cloudcode-pa.googleapis.com', 'POST', '/v1internal:retrieveUserQuota', false],
       ['www.googleapis.com', 'GET', '/oauth2/v2/userinfo', false],
       ['oauth2.googleapis.com', 'POST', '/token', false],
     ]

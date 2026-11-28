@@ -47,10 +47,27 @@ export interface LimitEndpoint {
   /** The provider's answer, read into windows; none when it holds no window this reads. */
   read(body: unknown): { windows: LimitWindow[]; plan: string | null }
   /**
-   * What an answer that gave no window held, for the error: its fields' names and the provider's own identifiers, enough
-   * to write the reader from, never a value of the account's — no token, email or project.
+   * Whether the answer has a shape `read` can tell from an empty one; when absent, every answer has. One it has not —
+   * an error, a list that is none — is a failed read, never an answer without windows, and asks no fallback.
    */
-  describe?(body: unknown, prelude: unknown): string
+  valid?(body: unknown): boolean
+  /**
+   * A last request on the same host, with the same method, headers and body, asked when the answer gave no window: its
+   * windows stand in. Google's summary leaves Gemini out for some accounts, which its per-model quota still holds. A
+   * status in `absent` says the host has none: no window, as the answer gave.
+   */
+  readonly fallback?: { readonly path: string; readonly absent: readonly number[]; read(body: unknown): LimitWindow[]; valid(body: unknown): boolean }
+  /**
+   * What an answer that gave no window held, for the error, and what the fallback answered: its fields' names and the
+   * provider's own identifiers, enough to write the reader from, never a value of the account's — no token, email or project.
+   */
+  describe?(body: unknown, prelude: unknown, fallback?: FallbackAnswer): string
+}
+
+/** The fallback's answer: its status, and its JSON when that is 200. */
+export interface FallbackAnswer {
+  readonly status: number
+  readonly body?: unknown
 }
 
 const object = (value: unknown): Record<string, unknown> | null =>
@@ -81,10 +98,89 @@ function googleProject(prelude: unknown): string | null {
   return null
 }
 
-/** `remainingFraction`, or the oneof as protobuf-es writes it, `remaining: {remainingFraction}` or `{case, value}`. */
-function googleFraction(bucket: Record<string, unknown>): number | null {
+/** A number, or one written as a string, as proto3 JSON may write it. */
+const decimal = (value: unknown): number | null =>
+  finite(value) ?? (typeof value === 'string' && /^\s*-?\d+(\.\d+)?([eE][-+]?\d+)?\s*$/.test(value) ? finite(Number(value)) : null)
+
+/**
+ * The oneof `remaining`: `remainingFraction` or `remainingAmount`, in camel or snake case, or as protobuf-es writes it,
+ * `remaining: {remainingFraction}` or `{case, value}`. Absent, either is undefined.
+ */
+function googleRemainder(bucket: Record<string, unknown>): { fraction: unknown; amount: unknown } {
   const remaining = object(bucket.remaining)
-  return finite(bucket.remainingFraction) ?? finite(remaining?.remainingFraction) ?? (remaining?.case === 'remainingFraction' ? finite(remaining.value) : null)
+  return {
+    fraction: bucket.remainingFraction ?? bucket.remaining_fraction ?? remaining?.remainingFraction ?? (remaining?.case === 'remainingFraction' ? remaining.value : undefined),
+    amount: bucket.remainingAmount ?? bucket.remaining_amount ?? remaining?.remainingAmount ?? (remaining?.case === 'remainingAmount' ? remaining.value : undefined),
+  }
+}
+
+const googleFraction = (bucket: Record<string, unknown>): number | null => decimal(googleRemainder(bucket).fraction)
+
+/** The bucket's `resetTime` (or `reset_time`), in milliseconds; null when it holds none. */
+function googleReset(bucket: Record<string, unknown>): number | null {
+  const time = bucket.resetTime ?? bucket.reset_time
+  const ms = typeof time === 'string' ? Date.parse(time) : Number.NaN
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * What remains of a bucket, from 0 to 1, as Omarchy's `used` reads it (basecamp/omarchy, "Google's answer"): its
+ * fraction; an amount, which gives no share of the whole but at zero; neither, with a reset time, nothing left — proto3
+ * JSON leaves a zero out. None for a disabled bucket, a fraction outside 0 to 1, or one that is not a number.
+ */
+function googleRemaining(bucket: Record<string, unknown>): number | null {
+  if (bucket.disabled === true) return null
+  const { fraction, amount } = googleRemainder(bucket)
+  if (fraction == null && amount != null) return amount === 0 || amount === '0' ? 0 : null
+  if (fraction == null) return googleReset(bucket) === null ? null : 0
+  const value = decimal(fraction)
+  return value !== null && value >= 0 && value <= 1 ? value : null
+}
+
+/** Whether `key` holds a list, or nothing: Omarchy's `listed`. */
+const listed = (value: Record<string, unknown>, key: string): boolean => value[key] == null || Array.isArray(value[key])
+
+/** The summary's Gemini group: named `Gemini Models` or `Gemini`. */
+const geminiGroup = (group: Record<string, unknown> | null): boolean => typeof group?.displayName === 'string' && /^gemini( models)?$/i.test(group.displayName.trim())
+
+/**
+ * Whether a summary is one Omarchy's `extract_limits` reads, empty or not: an object, wrapped or bare, with no `error`,
+ * its `groups` and `buckets` lists or absent, the Gemini group's `buckets` too. Any other is a failed read.
+ */
+function googleSummaryValid(body: unknown): boolean {
+  const root = object(body)
+  const summary = googleSummary(body)
+  if (root === null || summary === null || 'error' in root || 'error' in summary || !listed(summary, 'groups') || !listed(summary, 'buckets')) return false
+  return (Array.isArray(summary.groups) ? summary.groups : []).every((g) => !geminiGroup(object(g)) || listed(object(g)!, 'buckets'))
+}
+
+/** Whether a per-model quota is one Omarchy's `extract_model_limits` reads: an object with no `error`, its `buckets` a list or absent. */
+function googleQuotaValid(body: unknown): boolean {
+  const root = object(body)
+  const quota = googleSummary(body)
+  return root !== null && quota !== null && !('error' in root) && !('error' in quota) && listed(quota, 'buckets')
+}
+
+/**
+ * Google's per-model quota (`retrieveUserQuota`, Omarchy's `extract_model_limits`): of the buckets whose `modelId`
+ * (after `models/`) begins `gemini`, Argon's apart, the most spent, the earliest reset among equals, as the 5-hour
+ * window; an untouched one without its reset, which Google rolls to the request's time plus five hours.
+ */
+function googleModelWindows(body: unknown): LimitWindow[] {
+  const answer = googleSummary(body)
+  let best: { used: number; reset: number | null } | null = null
+  for (const value of Array.isArray(answer?.buckets) ? answer.buckets : []) {
+    const bucket = object(value)
+    const named = bucket?.modelId ?? bucket?.model_id
+    const model = typeof named === 'string' ? named.trim().toLowerCase().replace(/^models\//, '') : ''
+    if (bucket === null || !model.startsWith('gemini') || model.includes('argon')) continue
+    const remaining = googleRemaining(bucket)
+    if (remaining === null) continue
+    const used = Math.round((1 - remaining) * 10_000) / 10_000
+    const reset = used > 0 ? googleReset(bucket) : null
+    if (best === null || used > best.used || (used === best.used && reset !== null && (best.reset === null || reset < best.reset))) best = { used, reset }
+  }
+  return best === null ? [] : [{ kind: 'five_hour', usedPercent: percent(hundredths(best.used * 100)), resetsAt: instant(best.reset) }]
 }
 
 const FIVE_HOURS = ['5h', 'session', '5-hour', 'five hour', 'five-hour']
@@ -113,7 +209,8 @@ export const DIAGNOSTIC_WORDS: ReadonlySet<string> = new Set(
     'tos not supported by client account unknown location unsupported restricted network age user validation verification required ' +
     'window windows weekly week daily day hourly hour hours five session monthly month limit limits remaining quota quotas reset time ' +
     'fraction amount bucket buckets group groups id ids name display description disabled enabled summary response case value ' +
-    'reason code message plan type info and or of for with in per shared used left'
+    'reason code message plan type info and or of for with in per shared used left ' +
+    'preview tab high low medium thinking image exp experimental latest token tokens input output requests'
   ).split(' '),
 )
 
@@ -123,7 +220,8 @@ export const DIAGNOSTIC_FIELDS: ReadonlySet<string> = new Set(
     'buckets groups description bucketId displayName window remainingFraction remainingAmount disabled resetTime response summary ' +
     'remaining case value currentTier paidTier allowedTiers ineligibleTiers cloudaicompanionProject gcpManaged id name tierId ' +
     'reasonCode reasonMessage isDefault planInfo planType manageSubscriptionUri upgradeSubscriptionUri upgradeSubscriptionText ' +
-    'upgradeSubscriptionType userDefinedCloudaicompanionProject usesGcpTos hasAcceptedTos privacyNotice'
+    'upgradeSubscriptionType userDefinedCloudaicompanionProject usesGcpTos hasAcceptedTos privacyNotice ' +
+    'modelId model_id tokenType remaining_fraction remaining_amount reset_time error code message status details'
   ).split(' '),
 )
 
@@ -185,13 +283,39 @@ function describeSummary(body: unknown, project: string | null): string {
     ]
     return `${words(b.bucketId) ?? 'no bucketId'} (${shown.join(', ')}, fields ${fields(b)})`
   }
-  const list = (value: unknown): string => (Array.isArray(value) ? `[${value.map(bucket).join('; ')}]` : 'none')
+  const list = (value: unknown): string => (Array.isArray(value) ? `[${value.map(bucket).join('; ')}]` : value == null ? 'none' : 'not a list')
   const groups = Array.isArray(summary?.groups) ? summary.groups.map((g) => `${words(object(g)?.displayName) ?? 'unnamed'} ${list(object(g)?.buckets)}`) : []
   const text = [
     `fields ${fields(root)}`,
     ...(summary === root ? [] : [`inside, fields ${fields(summary)}`]),
     ...(summary?.buckets === undefined ? [] : [`buckets ${list(summary.buckets)}`]),
-    `groups ${groups.length === 0 ? 'none' : groups.join(' | ')}`,
+    `groups ${groups.length > 0 ? groups.join(' | ') : summary?.groups == null || Array.isArray(summary.groups) ? 'none' : 'not a list'}`,
+  ].join('; ')
+  return unlessProject(capped(text, 1500), project)
+}
+
+/**
+ * What `retrieveUserQuota` answered: its status when it has no quota (400, 404), else its fields and each bucket's model,
+ * fraction, state and fields.
+ */
+function describeQuota(answer: FallbackAnswer, project: string | null): string {
+  if (answer.status !== 200) return `answered ${String(answer.status)}`
+  const root = object(answer.body)
+  const inner = googleSummary(answer.body)
+  const bucket = (value: unknown): string => {
+    const b = object(value)
+    if (b === null) return 'not an object'
+    const named = b.modelId ?? b.model_id
+    const shown = [
+      `remainingFraction ${fraction(googleFraction(b))}`,
+      ...(b.disabled === undefined ? [] : [`disabled ${typeof b.disabled === 'boolean' ? String(b.disabled) : 'not a boolean'}`]),
+    ]
+    return `${words(typeof named === 'string' ? named.replace(/^models\//, '') : named) ?? 'no modelId'} (${shown.join(', ')}, fields ${fields(b)})`
+  }
+  const text = [
+    `fields ${fields(root)}`,
+    ...(inner === root ? [] : [`inside, fields ${fields(inner)}`]),
+    `buckets ${Array.isArray(inner?.buckets) ? `[${inner.buckets.map(bucket).join('; ')}]` : inner?.buckets == null ? 'none' : 'not a list'}`,
   ].join('; ')
   return unlessProject(capped(text, 1500), project)
 }
@@ -278,8 +402,9 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
   // answer"): the quota summary agy 1.5.13 reads (its quota_summary.proto), for the account's project, which
   // `loadCodeAssist` names — both POSTs, as Antigravity's client, which Google requires. The Gemini buckets become the
   // 5-hour and weekly windows, used being what the remaining fraction leaves; a disabled bucket left out. A window
-  // untouched (fraction 1) has no reset: Google then gives the request's time plus the window's length. An answer with
-  // no such bucket fails naming what it held, never a value of the account's.
+  // untouched (fraction 1) has no reset: Google then gives the request's time plus the window's length. A summary with
+  // no such bucket — Google AI Ultra's, the shared consumer project's — gives way to the per-model quota, as Omarchy reads
+  // it; with none there either, the read fails naming what both held, never a value of the account's.
   antigravity: {
     host: 'daily-cloudcode-pa.googleapis.com',
     path: '/v1internal:retrieveUserQuotaSummary',
@@ -295,13 +420,15 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
       const summary = googleSummary(body)
       const groups = Array.isArray(summary?.groups) ? summary.groups : []
       // The deprecated top-level buckets (the proto's field 1), then each group's; a Gemini bucket is one whose id says
-      // so, or one in the group named Gemini, Argon's apart.
+      // so, or one in the group named Gemini — or any top-level one when there is no group, Claude and GPT's `3p` ids
+      // excepted —, Argon's apart.
+      const ungrouped = groups.length === 0
       const candidates = [
-        ...(Array.isArray(summary?.buckets) ? summary.buckets : []).map((b) => ({ bucket: object(b), group: false })),
+        ...(Array.isArray(summary?.buckets) ? summary.buckets : []).map((b) => ({ bucket: object(b), group: ungrouped && !/^3p/i.test(String(object(b)?.bucketId ?? '')) })),
         ...groups.flatMap((g) => {
           const group = object(g)
           const buckets = Array.isArray(group?.buckets) ? group.buckets : []
-          const gemini = typeof group?.displayName === 'string' && /^gemini( models)?$/i.test(group.displayName.trim())
+          const gemini = geminiGroup(group)
           return buckets.map((b) => ({ bucket: object(b), group: gemini }))
         }),
       ]
@@ -310,17 +437,20 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
         const id = typeof bucket?.bucketId === 'string' ? bucket.bucketId.toLowerCase() : ''
         if (bucket === null || id.includes('argon') || !(group || /^gemini[-_]/.test(id))) continue
         const kind = googleCadence(bucket)
-        const remaining = googleFraction(bucket)
-        if (kind === null || remaining === null || remaining < 0 || remaining > 1 || bucket.disabled === true) continue
-        const resetsAt = remaining >= 1 || typeof bucket.resetTime !== 'string' ? null : instant(Date.parse(bucket.resetTime))
+        const remaining = googleRemaining(bucket)
+        if (kind === null || remaining === null) continue
+        const resetsAt = remaining >= 1 ? null : instant(googleReset(bucket))
         const before = least.get(kind)
         if (before === undefined || remaining < before.remaining) least.set(kind, { remaining, resetsAt })
       }
       const windows = [...least].map(([kind, w]): LimitWindow => ({ kind, usedPercent: percent(hundredths((1 - w.remaining) * 100)), resetsAt: w.resetsAt }))
       return { windows: ordered(windows), plan: null }
     },
-    describe(body, prelude) {
-      return `loadCodeAssist ${describeAssist(prelude)}; summary ${describeSummary(body, googleProject(prelude))}`
+    valid: googleSummaryValid,
+    fallback: { path: '/v1internal:retrieveUserQuota', absent: [400, 404], read: googleModelWindows, valid: googleQuotaValid },
+    describe(body, prelude, fallback) {
+      const project = googleProject(prelude)
+      return `loadCodeAssist ${describeAssist(prelude)}; summary ${describeSummary(body, project)}${fallback === undefined ? '' : `; retrieveUserQuota ${describeQuota(fallback, project)}`}`
     },
   },
 }
@@ -492,11 +622,24 @@ export class SubscriptionLimits {
             if (first.status !== 200) throw new Error(`${endpoint.host} answered ${String(first.status)} to ${endpoint.prelude.path}`)
             prelude = json(first.body, endpoint.host, endpoint.prelude.path)
           }
-          const answer = await send(endpoint.path, endpoint.method ?? 'GET', endpoint.body?.(prelude))
+          const body = endpoint.body?.(prelude)
+          const answer = await send(endpoint.path, endpoint.method ?? 'GET', body)
           if (answer.status !== 200) throw new Error(`${endpoint.host} answered ${String(answer.status)}`)
           const parsed = json(answer.body, endpoint.host, endpoint.path)
-          const read = endpoint.read(parsed)
-          if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window${endpoint.describe === undefined ? '' : `: ${endpoint.describe(parsed, prelude)}`}`)
+          const describe = (fallback?: FallbackAnswer) => (endpoint.describe === undefined ? '' : `: ${endpoint.describe(parsed, prelude, fallback)}`)
+          if (endpoint.valid?.(parsed) === false) throw new Error(`${endpoint.host} answered ${endpoint.path} in another shape${describe()}`)
+          let read = endpoint.read(parsed)
+          let fallback: FallbackAnswer | undefined
+          if (read.windows.length === 0 && endpoint.fallback !== undefined) {
+            const other = await send(endpoint.fallback.path, endpoint.method ?? 'GET', body)
+            if (other.status === 200) {
+              fallback = { status: 200, body: json(other.body, endpoint.host, endpoint.fallback.path) }
+              if (!endpoint.fallback.valid(fallback.body)) throw new Error(`${endpoint.host} answered ${endpoint.fallback.path} in another shape${describe(fallback)}`)
+              read = { windows: ordered(endpoint.fallback.read(fallback.body)), plan: read.plan }
+            } else if (endpoint.fallback.absent.includes(other.status)) fallback = { status: other.status }
+            else throw new Error(`${endpoint.host} answered ${String(other.status)} to ${endpoint.fallback.path}`)
+          }
+          if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window${describe(fallback)}`)
           this.last.set(profile, { ...read, checkedAt: new Date(this.now()).toISOString(), stale: false, error: null })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

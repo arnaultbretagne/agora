@@ -55,6 +55,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R45 | 2026-11-27 | `e0b61ac` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140646308244): every credentials test green, the job red for L146 of `packages/log/test/subagents.test.ts` alone ("kept as a generic element of its host", line 345), which this pull request does not touch and which passed in the `check` jobs on `c380b40`, `189f2ad` and `9067fc5` (R42–R44); ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R44. |
 | R46 | 2026-11-27 | `ae185d0` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140652246082): every credentials test green, L146 green again, the job red for L29 of `packages/log/test/recovery.test.ts` alone ("timed out: execution.ended" after 18.6 s), which this pull request does not touch and which passed in the `check` jobs on `189f2ad`, `9067fc5` and `e0b61ac` (R43–R45); ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R44. |
 | R47 | 2026-11-27 | `bc93751` | unit, local | The `check` job of pull request #252 (GitHub Actions job 140656577927), all green — V6 skipped, no Docker there —, L146 and L29 of the log green again, before #253 made them reliable on `main`: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R44. |
+| R48 | 2026-11-28 | `f9b0e92` | unit, local | The `check` job of pull request #254 (GitHub Actions job 140896657609): every credentials test green, the job red for U70 of `apps/web/test/browser/screen.test.ts` alone (line 1723, Cancel not visible beside Send during a `/sleep 6` turn), which this pull request does not touch — it changes `packages/credentials` and `docs/specs/credentials.md` alone; ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). For C90 and C91, Omarchy's answers (basecamp/omarchy `cafb698` `test/shell.d/agent-usage-agy-test.sh`, `7278346` `test/shell.d/agent-usage-agy-limits-test.sh`) written in the test. No Google, no gateway: a stub answers each host. |
+| R49 | 2026-11-28 | `a66b496` | unit, local | The `check` job of pull request #254 (GitHub Actions job 140900564370), all green — V6 skipped, no Docker there —, U70 green again: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`). The answers as R48. |
 
 ## Cases
 
@@ -241,6 +243,20 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C89 | simulated: stub (the gateway answers) | unit | R46 | proven | As R44. |
 | C88 | — | unit | R47 | proven | As R44. |
 | C89 | simulated: stub (the gateway answers) | unit | R47 | proven | As R44. |
+| C32 | — | unit | R48 | proven | The `limits` token names `10.244.0.9`; seven grants, three of them `POST` on `daily-cloudcode-pa.googleapis.com`; `/v1internal:retrieveUserQuota` covered with `POST`. |
+| C36 | — | unit | R48 | proven | As R42; Gemini's bucket without its fraction nor a reset and the disabled one: no window; one without its fraction with a reset: the week at 100 % with its reset. |
+| C83 | — | unit | R48 | proven | Of Google, three grants on `daily-cloudcode-pa.googleapis.com`, `POST`: `^/v1internal:loadCodeAssist$`, `^/v1internal:retrieveUserQuotaSummary$`, `^/v1internal:retrieveUserQuota$`. Not covered: a `GET`, a query and a suffix of each, `/v1internal:retrieveUser`, `/v1internal:retrieveUserQuotas`, `fetchAvailableModels`, `onboardUser`, `streamGenerateContent`, `cloudcode-pa.googleapis.com`; no other `POST`; no grant on the Internet. |
+| C88 | — | unit | R48 | proven | As R44. |
+| C89 | simulated: stub (the gateway answers) | unit | R48 | proven | As R44, the per-model quota answering 404: each error ending `; retrieveUserQuota answered 404`. 200 random answers, the per-model quota random too (bare or in `response`), one round in four a 400: no run of letters or digits but the error's own, the vocabulary's or a fraction's. |
+| C90 | simulated: stub (the gateway answers) | unit | R48 | proven | Omarchy's Ultra answers: `retrieveUserQuota` asked third, `{"project":"aicode-consumers"}`, `antigravity/1.5.13 linux/amd64`; the 5-hour window at 15 %, reset `2026-10-07T12:00:00.000Z`. Untouched: 0 %, no reset. A summary with its Gemini group: two requests. 404, 400: no window, `stale`, the error ending `retrieveUserQuota answered 404` (`400`). 500 after a read: 15 % kept, `stale`, `answered 500 to /v1internal:retrieveUserQuota`. The unread per-model quota: `"claude-opus-*-*-high"`, `"gemini-*.*-pro" (remainingFraction none, disabled false, …)`, `"gemini-*-argon"`, the email's model `withheld`; a project of Google's words: `retrieveUserQuota withheld, as it would hold the project`; not JSON: `answered no JSON to /v1internal:retrieveUserQuota`. |
+| C91 | — | unit | R48 | proven | Omarchy's summaries: 10 % and 5 % with their resets; the week at 50 %; the 5-hour at 60 % from snake case; the 5-hour at 100 % from a bucket with a reset and no fraction; the week at 100 % from an amount of `"0"`; no window for the seven shapes; 50 %; 100 % for the oneof's amount at `"0"`. |
+| C32 | — | unit | R49 | proven | As R48. |
+| C36 | — | unit | R49 | proven | As R48. |
+| C83 | — | unit | R49 | proven | As R48. |
+| C88 | — | unit | R49 | proven | As R48. |
+| C89 | simulated: stub (the gateway answers) | unit | R49 | proven | As R48. |
+| C90 | simulated: stub (the gateway answers) | unit | R49 | proven | As R48. |
+| C91 | — | unit | R49 | proven | As R48. |
 
 The partial verdicts are tracked in #107.
 
