@@ -47,11 +47,16 @@ export interface LimitEndpoint {
   /** The provider's answer, read into windows; none when it holds no window this reads. */
   read(body: unknown): { windows: LimitWindow[]; plan: string | null }
   /**
+   * Whether the answer has a shape `read` can tell from an empty one; when absent, every answer has. One it has not —
+   * an error, a list that is none — is a failed read, never an answer without windows, and asks no fallback.
+   */
+  valid?(body: unknown): boolean
+  /**
    * A last request on the same host, with the same method, headers and body, asked when the answer gave no window: its
    * windows stand in. Google's summary leaves Gemini out for some accounts, which its per-model quota still holds. A
    * status in `absent` says the host has none: no window, as the answer gave.
    */
-  readonly fallback?: { readonly path: string; readonly absent: readonly number[]; read(body: unknown): LimitWindow[] }
+  readonly fallback?: { readonly path: string; readonly absent: readonly number[]; read(body: unknown): LimitWindow[]; valid(body: unknown): boolean }
   /**
    * What an answer that gave no window held, for the error, and what the fallback answered: its fields' names and the
    * provider's own identifiers, enough to write the reader from, never a value of the account's — no token, email or project.
@@ -132,6 +137,30 @@ function googleRemaining(bucket: Record<string, unknown>): number | null {
   return value !== null && value >= 0 && value <= 1 ? value : null
 }
 
+/** Whether `key` holds a list, or nothing: Omarchy's `listed`. */
+const listed = (value: Record<string, unknown>, key: string): boolean => value[key] == null || Array.isArray(value[key])
+
+/** The summary's Gemini group: named `Gemini Models` or `Gemini`. */
+const geminiGroup = (group: Record<string, unknown> | null): boolean => typeof group?.displayName === 'string' && /^gemini( models)?$/i.test(group.displayName.trim())
+
+/**
+ * Whether a summary is one Omarchy's `extract_limits` reads, empty or not: an object, wrapped or bare, with no `error`,
+ * its `groups` and `buckets` lists or absent, the Gemini group's `buckets` too. Any other is a failed read.
+ */
+function googleSummaryValid(body: unknown): boolean {
+  const root = object(body)
+  const summary = googleSummary(body)
+  if (root === null || summary === null || 'error' in root || 'error' in summary || !listed(summary, 'groups') || !listed(summary, 'buckets')) return false
+  return (Array.isArray(summary.groups) ? summary.groups : []).every((g) => !geminiGroup(object(g)) || listed(object(g)!, 'buckets'))
+}
+
+/** Whether a per-model quota is one Omarchy's `extract_model_limits` reads: an object with no `error`, its `buckets` a list or absent. */
+function googleQuotaValid(body: unknown): boolean {
+  const root = object(body)
+  const quota = googleSummary(body)
+  return root !== null && quota !== null && !('error' in root) && !('error' in quota) && listed(quota, 'buckets')
+}
+
 /**
  * Google's per-model quota (`retrieveUserQuota`, Omarchy's `extract_model_limits`): of the buckets whose `modelId`
  * (after `models/`) begins `gemini`, Argon's apart, the most spent, the earliest reset among equals, as the 5-hour
@@ -192,7 +221,7 @@ export const DIAGNOSTIC_FIELDS: ReadonlySet<string> = new Set(
     'remaining case value currentTier paidTier allowedTiers ineligibleTiers cloudaicompanionProject gcpManaged id name tierId ' +
     'reasonCode reasonMessage isDefault planInfo planType manageSubscriptionUri upgradeSubscriptionUri upgradeSubscriptionText ' +
     'upgradeSubscriptionType userDefinedCloudaicompanionProject usesGcpTos hasAcceptedTos privacyNotice ' +
-    'modelId model_id tokenType remaining_fraction remaining_amount reset_time'
+    'modelId model_id tokenType remaining_fraction remaining_amount reset_time error code message status details'
   ).split(' '),
 )
 
@@ -254,13 +283,13 @@ function describeSummary(body: unknown, project: string | null): string {
     ]
     return `${words(b.bucketId) ?? 'no bucketId'} (${shown.join(', ')}, fields ${fields(b)})`
   }
-  const list = (value: unknown): string => (Array.isArray(value) ? `[${value.map(bucket).join('; ')}]` : 'none')
+  const list = (value: unknown): string => (Array.isArray(value) ? `[${value.map(bucket).join('; ')}]` : value == null ? 'none' : 'not a list')
   const groups = Array.isArray(summary?.groups) ? summary.groups.map((g) => `${words(object(g)?.displayName) ?? 'unnamed'} ${list(object(g)?.buckets)}`) : []
   const text = [
     `fields ${fields(root)}`,
     ...(summary === root ? [] : [`inside, fields ${fields(summary)}`]),
     ...(summary?.buckets === undefined ? [] : [`buckets ${list(summary.buckets)}`]),
-    `groups ${groups.length === 0 ? 'none' : groups.join(' | ')}`,
+    `groups ${groups.length > 0 ? groups.join(' | ') : summary?.groups == null || Array.isArray(summary.groups) ? 'none' : 'not a list'}`,
   ].join('; ')
   return unlessProject(capped(text, 1500), project)
 }
@@ -286,7 +315,7 @@ function describeQuota(answer: FallbackAnswer, project: string | null): string {
   const text = [
     `fields ${fields(root)}`,
     ...(inner === root ? [] : [`inside, fields ${fields(inner)}`]),
-    `buckets ${Array.isArray(inner?.buckets) ? `[${inner.buckets.map(bucket).join('; ')}]` : 'none'}`,
+    `buckets ${Array.isArray(inner?.buckets) ? `[${inner.buckets.map(bucket).join('; ')}]` : inner?.buckets == null ? 'none' : 'not a list'}`,
   ].join('; ')
   return unlessProject(capped(text, 1500), project)
 }
@@ -399,7 +428,7 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
         ...groups.flatMap((g) => {
           const group = object(g)
           const buckets = Array.isArray(group?.buckets) ? group.buckets : []
-          const gemini = typeof group?.displayName === 'string' && /^gemini( models)?$/i.test(group.displayName.trim())
+          const gemini = geminiGroup(group)
           return buckets.map((b) => ({ bucket: object(b), group: gemini }))
         }),
       ]
@@ -417,7 +446,8 @@ export const LIMIT_ENDPOINTS: Readonly<Record<string, LimitEndpoint>> = {
       const windows = [...least].map(([kind, w]): LimitWindow => ({ kind, usedPercent: percent(hundredths((1 - w.remaining) * 100)), resetsAt: w.resetsAt }))
       return { windows: ordered(windows), plan: null }
     },
-    fallback: { path: '/v1internal:retrieveUserQuota', absent: [400, 404], read: googleModelWindows },
+    valid: googleSummaryValid,
+    fallback: { path: '/v1internal:retrieveUserQuota', absent: [400, 404], read: googleModelWindows, valid: googleQuotaValid },
     describe(body, prelude, fallback) {
       const project = googleProject(prelude)
       return `loadCodeAssist ${describeAssist(prelude)}; summary ${describeSummary(body, project)}${fallback === undefined ? '' : `; retrieveUserQuota ${describeQuota(fallback, project)}`}`
@@ -596,17 +626,20 @@ export class SubscriptionLimits {
           const answer = await send(endpoint.path, endpoint.method ?? 'GET', body)
           if (answer.status !== 200) throw new Error(`${endpoint.host} answered ${String(answer.status)}`)
           const parsed = json(answer.body, endpoint.host, endpoint.path)
+          const describe = (fallback?: FallbackAnswer) => (endpoint.describe === undefined ? '' : `: ${endpoint.describe(parsed, prelude, fallback)}`)
+          if (endpoint.valid?.(parsed) === false) throw new Error(`${endpoint.host} answered ${endpoint.path} in another shape${describe()}`)
           let read = endpoint.read(parsed)
           let fallback: FallbackAnswer | undefined
           if (read.windows.length === 0 && endpoint.fallback !== undefined) {
             const other = await send(endpoint.fallback.path, endpoint.method ?? 'GET', body)
             if (other.status === 200) {
               fallback = { status: 200, body: json(other.body, endpoint.host, endpoint.fallback.path) }
+              if (!endpoint.fallback.valid(fallback.body)) throw new Error(`${endpoint.host} answered ${endpoint.fallback.path} in another shape${describe(fallback)}`)
               read = { windows: ordered(endpoint.fallback.read(fallback.body)), plan: read.plan }
             } else if (endpoint.fallback.absent.includes(other.status)) fallback = { status: other.status }
             else throw new Error(`${endpoint.host} answered ${String(other.status)} to ${endpoint.fallback.path}`)
           }
-          if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window${endpoint.describe === undefined ? '' : `: ${endpoint.describe(parsed, prelude, fallback)}`}`)
+          if (read.windows.length === 0) throw new Error(`${endpoint.host} gave no window${describe(fallback)}`)
           this.last.set(profile, { ...read, checkedAt: new Date(this.now()).toISOString(), stale: false, error: null })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

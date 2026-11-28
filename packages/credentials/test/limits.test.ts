@@ -1,4 +1,4 @@
-// The accounts' limits (docs/specs/credentials.md, "Limits", C32, C34–C37, C84, C85, C87–C91): each provider's answer
+// The accounts' limits (docs/specs/credentials.md, "Limits", C32, C34–C37, C84, C85, C87–C92): each provider's answer
 // read into windows, the grant Agora gives itself, the reads it keeps, Google's requests, and a real GET and POST
 // through a stand-in gateway.
 import assert from 'node:assert/strict'
@@ -544,7 +544,7 @@ describe('Google\'s requests', () => {
     const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_. @+%/:​'
     const text = () => Array.from({ length: 4 + Math.floor(random() * 30) }, () => alphabet[Math.floor(random() * alphabet.length)]).join('')
     // The error's own words, beside the vocabulary and the fields' names the code lists.
-    const own = 'daily cloudcode pa googleapis com gave no window loadcodeassist currenttier paidtier none the account s own project google shared consumer ineligibletiers fields summary inside buckets groups unnamed withheld remainingfraction not a fraction disabled boolean displayname string an object bucketid true false as it would hold retrieveuserquota answered modelid'
+    const own = 'daily cloudcode pa googleapis com gave no window loadcodeassist currenttier paidtier none the account s own project google shared consumer ineligibletiers fields summary inside buckets groups unnamed withheld remainingfraction not a fraction disabled boolean displayname string an object bucketid true false as it would hold retrieveuserquota answered modelid in another shape list'
     const vocabulary = new Set([...own.split(' '), ...DIAGNOSTIC_WORDS, ...[...DIAGNOSTIC_FIELDS].map((f) => f.toLowerCase())])
     for (let round = 0; round < 200; round += 1) {
       const sent = [text(), text(), text(), text(), text(), text(), text(), text()]
@@ -665,6 +665,65 @@ describe('Google\'s requests', () => {
       return { status: 200, body: JSON.stringify(ultraSummary) }
     }, ['antigravity'])
     assert.equal((await notJson.limits.read()).antigravity!.error, 'daily-cloudcode-pa.googleapis.com answered no JSON to /v1internal:retrieveUserQuota')
+  })
+
+  it('C92 an answer of another shape, the summary\'s or the per-model quota\'s, as Omarchy tells it from an empty one: a failed read, stale, naming what it held, never a fallback; an answer carrying `error` never read', async () => {
+    // basecamp/omarchy at cafb698, bin/omarchy-agent-usage-agy: `extract_limits` (lines 303–313) and `extract_model_limits`
+    // (349–351) answer None for these shapes, and `collect_limits` (462–464, 473–474) raises before any fallback; an empty
+    // summary, `{"groups": []}`, is `[]`, and the fallback is asked.
+    const assist = { currentTier: { id: 'free-tier' }, cloudaicompanionProject: 'own-project-4821' }
+    const good = { buckets: [{ modelId: 'gemini-2.5-pro', remainingFraction: 0.8 }] }
+    const prefix = 'daily-cloudcode-pa.googleapis.com answered /v1internal:retrieveUserQuotaSummary in another shape: loadCodeAssist currentTier "free-tier", paidTier none, the account\'s own project, fields {currentTier, cloudaicompanionProject}; summary '
+    const shapes: [unknown, string][] = [
+      [null, 'fields none; groups none'],
+      [[1], 'fields none; groups none'],
+      [{ error: { code: 500 } }, 'fields {error}; groups none'],
+      [{ response: { error: { code: 500 }, groups: [{ displayName: 'Gemini Models', buckets: [{ window: '5h', remainingFraction: 0.5 }] }] } }, 'fields {response}; inside, fields {error, groups}; groups "gemini models" [no bucketId (window "5h", remainingFraction 0.5, fields {window, remainingFraction})]'],
+      [{ groups: 5 }, 'fields {groups}; groups not a list'],
+      [{ groups: 'abc' }, 'fields {groups}; groups not a list'],
+      [{ buckets: 5 }, 'fields {buckets}; buckets not a list; groups none'],
+      [{ groups: [{ displayName: 'Gemini Models', buckets: 5 }] }, 'fields {groups}; groups "gemini models" not a list'],
+    ]
+    for (const [summary, described] of shapes) {
+      const run = google({ status: 200, body: assist }, summary, { status: 200, body: good })
+      const failed = (await run.limits.read()).antigravity!
+      assert.deepEqual(failed, { windows: [], plan: null, checkedAt: null, stale: true, error: `${prefix}${described}` }, JSON.stringify(summary))
+      assert.deepEqual(run.calls.map((c) => c.path), ['/v1internal:loadCodeAssist', '/v1internal:retrieveUserQuotaSummary'], `no fallback after ${JSON.stringify(summary)}`)
+    }
+
+    // The per-model quota of another shape — carrying `error` beside a Gemini bucket it would read, not an object, its
+    // buckets not a list —: a failed read too, never its window.
+    const empty = { groups: [] }
+    const quotas: [unknown, string][] = [
+      [{ error: { code: 500 }, ...good }, 'fields {error, buckets}; buckets ["gemini-*.*-pro" (remainingFraction 0.8, fields {modelId, remainingFraction})]'],
+      [{ response: { error: { code: 500 }, ...good } }, 'fields {response}; inside, fields {error, buckets}; buckets ["gemini-*.*-pro" (remainingFraction 0.8, fields {modelId, remainingFraction})]'],
+      [null, 'fields none; buckets none'],
+      [{ buckets: 5 }, 'fields {buckets}; buckets not a list'],
+    ]
+    for (const [quota, described] of quotas) {
+      const run = google({ status: 200, body: assist }, empty, { status: 200, body: quota })
+      const failed = (await run.limits.read()).antigravity!
+      assert.deepEqual(failed, {
+        windows: [], plan: null, checkedAt: null, stale: true,
+        error: `daily-cloudcode-pa.googleapis.com answered /v1internal:retrieveUserQuota in another shape: loadCodeAssist currentTier "free-tier", paidTier none, the account\'s own project, fields {currentTier, cloudaicompanionProject}; summary fields {groups}; groups none; retrieveUserQuota ${described}`,
+      }, JSON.stringify(quota))
+    }
+
+    // An empty summary is an answer: the fallback asked, its window read. Its window, then a summary of another shape:
+    // that window kept, stale, with why.
+    const ok = google({ status: 200, body: assist }, empty, { status: 200, body: good })
+    assert.deepEqual((await ok.limits.read()).antigravity, { windows: [{ kind: 'five_hour', usedPercent: 20, resetsAt: null }], plan: null, checkedAt: '2026-10-07T10:00:00.000Z', stale: false, error: null })
+    assert.deepEqual(ok.calls.map((c) => c.path), ['/v1internal:loadCodeAssist', '/v1internal:retrieveUserQuotaSummary', '/v1internal:retrieveUserQuota'])
+    let summary: unknown = empty
+    const { limits, clock } = limitsWith(async (input) => {
+      if (input.host !== 'daily-cloudcode-pa.googleapis.com') return { status: 200, body: JSON.stringify(ANSWERS[byHost(input)]) }
+      if (input.path === '/v1internal:loadCodeAssist') return { status: 200, body: JSON.stringify(assist) }
+      return { status: 200, body: JSON.stringify(input.path === '/v1internal:retrieveUserQuota' ? good : summary) }
+    }, ['antigravity'])
+    await limits.read()
+    summary = { error: { code: 500 } }
+    clock.now += 300_000
+    assert.deepEqual((await limits.read()).antigravity, { windows: [{ kind: 'five_hour', usedPercent: 20, resetsAt: null }], plan: null, checkedAt: '2026-10-07T10:00:00.000Z', stale: true, error: `${prefix}fields {error}; groups none` })
   })
 })
 
